@@ -1,0 +1,10 @@
+.env
+*.log
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+backend/data/raw/
+reports/
+postgres_data/
+pgdata/

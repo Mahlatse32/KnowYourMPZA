@@ -30,3 +30,5 @@ class Politician(Base):
     aliases = relationship("PoliticianAlias", back_populates="politician", cascade="all, delete-orphan")
     committee_memberships = relationship("CommitteeMembership", back_populates="politician", cascade="all, delete-orphan")
     document_mentions = relationship("DocumentMention", back_populates="politician", cascade="all, delete-orphan")
+    parliamentary_questions = relationship("ParliamentaryQuestion", back_populates="politician")
+    question_mentions = relationship("QuestionMention", back_populates="politician", cascade="all, delete-orphan")

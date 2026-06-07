@@ -1,6 +1,7 @@
 # KnowYourMPZA Backend
 
 FastAPI backend for verified South African MP data. It ingests People's Assembly profiles and PMG documents, archives fetched HTML, resolves MP aliases, and exposes quality/API endpoints.
+It also ingests parliamentary questions as source-backed backend data without adding AI, chatbot, frontend, auth, or search infrastructure.
 
 ## Run
 
@@ -27,7 +28,10 @@ curl -X POST http://localhost:8000/ingest/seed
 ```bash
 python scripts/ingest_people_assembly.py data/people_assembly_urls.txt
 python scripts/ingest_pmg_documents.py data/pmg_urls.txt
+python scripts/ingest_parliamentary_questions.py data/parliamentary_question_urls.txt
 ```
+
+Parliamentary question ingestion stores `parliamentary_questions`, `question_mentions`, and unresolved MP names in `unresolved_entities`. It preserves `asked_by_name`, `source_url`, and `archive_path` even when the asker cannot be linked to a politician yet.
 
 ## Bulk Source Discovery
 
@@ -66,6 +70,10 @@ curl "http://localhost:8000/committees?limit=50&offset=0"
 curl http://localhost:8000/committees/{committee_id}/politicians
 curl "http://localhost:8000/documents?limit=50&offset=0"
 curl http://localhost:8000/documents/{document_id}
+curl "http://localhost:8000/questions?limit=50&offset=0"
+curl "http://localhost:8000/questions?department=Basic%20Education"
+curl http://localhost:8000/questions/{question_id}
+curl "http://localhost:8000/politicians/{politician_id}/questions?limit=50&offset=0"
 ```
 
 ## Quality
@@ -75,7 +83,9 @@ python scripts/quality_check.py
 curl http://localhost:8000/quality/summary
 ```
 
-The quality summary includes totals, alias coverage, active/inactive politician status, ingestion run/error counts, archive-path coverage, and duplicate slug/source URL checks.
+The quality summary includes totals, alias coverage, parliamentary question counts, unresolved entity counts, active/inactive politician status, ingestion run/error counts, archive-path coverage, and duplicate slug/source URL checks.
+
+Known limitation: parliamentary question parsing is defensive HTML/text parsing. PDF-specific extraction and richer source-layout handling should be the next data milestone.
 
 ## Tests
 

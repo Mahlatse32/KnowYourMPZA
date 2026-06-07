@@ -22,3 +22,4 @@ class Source(Base):
     )
 
     documents = relationship("Document", back_populates="source")
+    parliamentary_questions = relationship("ParliamentaryQuestion", back_populates="source")

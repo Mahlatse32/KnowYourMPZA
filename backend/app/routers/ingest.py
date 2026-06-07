@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
+from app.ingestion.parliament_questions import ingest_parliamentary_question_urls
 from app.schemas.ingest import IngestionSummary, UrlBatchRequest
 from app.services.ingestion_service import (
     ingest_people_assembly_profiles,
@@ -48,5 +49,15 @@ def pmg_documents(payload: UrlBatchRequest, db: Session = Depends(get_db)) -> di
     urls = [str(url) for url in payload.urls]
     run = start_ingestion_run(db, "PMG", "api_pmg_documents", len(urls))
     summary = ingest_pmg_documents(db, urls)
+    finish_ingestion_run(db, run, summary)
+    return summary
+
+
+@router.post("/parliamentary-questions", response_model=IngestionSummary)
+def parliamentary_questions(payload: UrlBatchRequest, db: Session = Depends(get_db)) -> dict:
+    ensure_development()
+    urls = [str(url) for url in payload.urls]
+    run = start_ingestion_run(db, "Parliamentary Questions", "PARLIAMENTARY_QUESTIONS", len(urls))
+    summary = ingest_parliamentary_question_urls(db, urls)
     finish_ingestion_run(db, run, summary)
     return summary
