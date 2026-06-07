@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Environment
+.env
+*.env
+
+# Logs
+*.log
+
+# Docker/Postgres
+postgres_data/
+pgdata/
+
+# Local raw archives / generated data
+backend/data/raw/
+backend/reports/
+reports/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
