@@ -1,6 +1,8 @@
 from fastapi.testclient import TestClient
 
 from app.db import SessionLocal
+from app.ingestion.parliament_question_discovery import urls_from_listing
+from app.ingestion.pdf_utils import archive_pdf, extract_pdf_text, is_pdf_url
 from app.ingestion.people_assembly import create_slug
 from app.main import app
 from app.models.unresolved_entity import UnresolvedEntity
@@ -127,7 +129,7 @@ def test_parliamentary_question_ingestion_and_browse(monkeypatch):
     assert second.status_code == 200
     assert second.json()["updated_count"] >= 1
 
-    questions = client.get("/questions")
+    questions = client.get("/questions?limit=500")
     assert questions.status_code == 200
     question = next(item for item in questions.json() if item["source_url"] == url)
     assert question["asked_by_name"] == "Julius Malema"
@@ -164,7 +166,7 @@ def test_unresolved_question_asker_creates_unresolved_entity(monkeypatch):
     assert response.status_code == 200
     assert response.json()["processed_count"] == 1
 
-    question = next(item for item in client.get("/questions").json() if item["source_url"] == url)
+    question = next(item for item in client.get("/questions?limit=500").json() if item["source_url"] == url)
     assert question["asked_by_name"] == "Unknown Future MP"
     assert question["politician"] is None
 
@@ -177,3 +179,76 @@ def test_unresolved_question_asker_creates_unresolved_entity(monkeypatch):
             )
         ).first()
         assert entity is not None
+
+
+def test_pdf_utils_archive_detection_and_mocked_extraction(monkeypatch):
+    assert is_pdf_url("https://www.parliament.gov.za/storage/app/media/Docs/exe_rq_na/example.pdf")
+    assert not is_pdf_url("https://www.parliament.gov.za/questions-and-replies")
+
+    path = archive_pdf("Parliamentary Questions", "https://example.test/question/NW1.pdf", b"%PDF-1.4\n")
+    assert path.endswith(".pdf")
+    assert "parliament_questions" in path
+
+    class FakePage:
+        def extract_text(self):
+            return "Question Number: NW1"
+
+    class FakeReader:
+        def __init__(self, file_path):
+            self.pages = [FakePage()]
+
+    monkeypatch.setattr("app.ingestion.pdf_utils.PdfReader", FakeReader)
+    assert extract_pdf_text(path) == "Question Number: NW1"
+
+
+def test_parliamentary_question_pdf_ingestion(monkeypatch):
+    client.post("/ingest/seed")
+    url = "https://www.parliament.gov.za/storage/app/media/Docs/exe_rq_na/NW42.pdf"
+    text = (
+        "Question Number: NW42 Asked By: Julius Malema Department: Basic Education "
+        "Minister: Minister of Basic Education Question: What repairs are planned? "
+        "Answer: Repairs are planned in phases."
+    )
+    monkeypatch.setattr("app.ingestion.parliament_questions.download_file", lambda _: b"%PDF-1.4\n")
+    monkeypatch.setattr("app.ingestion.parliament_questions.extract_pdf_text", lambda _: text)
+
+    response = client.post("/ingest/parliamentary-questions", json={"urls": [url]})
+    assert response.status_code == 200
+    assert response.json()["processed_count"] == 1
+
+    question = next(item for item in client.get("/questions?limit=500").json() if item["source_url"] == url)
+    assert question["source_file_type"] == "PDF"
+    assert question["extracted_text_available"] is True
+    assert question["parse_status"] == "PARSED"
+    assert question["politician"] is not None
+
+
+def test_bad_pdf_is_archived_without_crashing(monkeypatch):
+    url = "https://www.parliament.gov.za/storage/app/media/Docs/exe_rq_na/bad.pdf"
+    monkeypatch.setattr("app.ingestion.parliament_questions.download_file", lambda _: b"not a pdf")
+    monkeypatch.setattr(
+        "app.ingestion.parliament_questions.extract_pdf_text",
+        lambda _: (_ for _ in ()).throw(ValueError("PDF text extraction failed: broken")),
+    )
+
+    response = client.post("/ingest/parliamentary-questions", json={"urls": [url]})
+    assert response.status_code == 200
+    assert response.json()["processed_count"] == 1
+
+    question = next(item for item in client.get("/questions?limit=500").json() if item["source_url"] == url)
+    assert question["source_file_type"] == "PDF"
+    assert question["parse_status"] == "FAILED"
+    assert question["archive_path"]
+
+
+def test_parliamentary_question_discovery_extracts_pdf_links():
+    html = """
+    <html><body>
+      <a href="/storage/app/media/Docs/exe_rq_na/RNW123-2026.pdf">Question Reply 2026</a>
+      <a href="https://archive.parliament.gov.za/handle/123456789/5997">Question Paper NA 2026</a>
+      <a href="/ordinary-page">Not relevant</a>
+    </body></html>
+    """
+    urls = urls_from_listing("https://www.parliament.gov.za/questions-and-replies", html, year=2026)
+    assert "https://www.parliament.gov.za/storage/app/media/Docs/exe_rq_na/RNW123-2026.pdf" in urls
+    assert "https://archive.parliament.gov.za/handle/123456789/5997" in urls

@@ -48,6 +48,18 @@ def quality_summary(db: Session) -> dict[str, int]:
             select(func.count()).select_from(ParliamentaryQuestion).where(ParliamentaryQuestion.archive_path.is_(None))
         )
         or 0,
+        "parliamentary_question_pdf_sources": db.scalar(
+            select(func.count()).select_from(ParliamentaryQuestion).where(ParliamentaryQuestion.source_file_type == "PDF")
+        )
+        or 0,
+        "parliamentary_question_parse_failed": db.scalar(
+            select(func.count()).select_from(ParliamentaryQuestion).where(ParliamentaryQuestion.parse_status == "FAILED")
+        )
+        or 0,
+        "parliamentary_question_parse_partial": db.scalar(
+            select(func.count()).select_from(ParliamentaryQuestion).where(ParliamentaryQuestion.parse_status == "PARTIAL")
+        )
+        or 0,
         "duplicate_slug_count": _duplicate_count(db, Politician.slug),
         "duplicate_source_url_count": _duplicate_count(db, Document.source_url),
     }

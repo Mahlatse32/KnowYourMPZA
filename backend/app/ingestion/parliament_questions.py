@@ -2,7 +2,7 @@ import hashlib
 import re
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ingestion.people_assembly import create_slug, extract_text
+from app.ingestion.pdf_utils import archive_pdf, download_file, extract_pdf_text, is_pdf_url
 from app.models.parliamentary_question import ParliamentaryQuestion
 from app.models.politician import Politician
 from app.models.politician_alias import PoliticianAlias
@@ -41,25 +42,56 @@ def archive_html(source_name: str, url: str, html: str) -> str:
 def parse_question_page(url: str, html: str) -> dict:
     soup = BeautifulSoup(html or "", "html.parser")
     text = extract_text(html)
-    fields = _label_fields(text)
-    question_text, answer_text = _split_question_answer(text, fields)
-    title = _title(soup, fields, url)
-    asked_by_name = _first(fields, "asked_by", "asked by", "member", "mp", "question by")
-    return {
-        "question_number": _first(fields, "question number", "question no", "number", "no"),
-        "title": title,
-        "asked_by_name": _clean_person_value(asked_by_name) if asked_by_name else None,
-        "department": _first(fields, "department", "portfolio", "to department"),
-        "minister": _clean_person_value(_first(fields, "minister", "answered by", "reply by")),
-        "question_text": question_text,
-        "answer_text": answer_text,
-        "asked_date": _parse_date(_first(fields, "asked date", "date asked", "question date", "asked on")),
-        "answered_date": _parse_date(_first(fields, "answered date", "date answered", "reply date", "answered on")),
-        "status": _first(fields, "status"),
-        "source_url": url,
-        "archive_path": archive_html(SOURCE_NAME, url, html),
-        "raw_text": text,
-    }
+    return _parsed_from_text(
+        url=url,
+        text=text,
+        title=_title(soup, _label_fields(text), url),
+        archive_path=archive_html(SOURCE_NAME, url, html),
+        source_file_type="HTML",
+        parse_notes=None,
+    )
+
+
+def parse_question_pdf(url: str, content: bytes, source_url: str | None = None) -> dict:
+    archive_path = archive_pdf(SOURCE_NAME, url, content)
+    try:
+        text = extract_pdf_text(archive_path)
+    except ValueError as exc:
+        text = ""
+        parse_status = "FAILED"
+        parse_notes = str(exc)
+    else:
+        parse_status = "PARSED" if text else "PARTIAL"
+        parse_notes = None if text else "PDF archived but no extractable text was found."
+    return _parsed_from_text(
+        url=source_url or url,
+        text=text,
+        title=_title_from_pdf_url(url),
+        archive_path=archive_path,
+        source_file_type="PDF",
+        parse_status=parse_status,
+        parse_notes=parse_notes,
+    )
+
+
+def parse_question_source(url: str) -> dict:
+    if is_pdf_url(url):
+        return parse_question_pdf(url, download_file(url))
+    html = fetch_page(url)
+    if not html:
+        raise ValueError("Fetch failed or returned empty HTML.")
+    pdf_url = _first_pdf_link(url, html)
+    if pdf_url:
+        try:
+            parsed = parse_question_pdf(pdf_url, download_file(pdf_url), source_url=url)
+            parsed["parse_notes"] = _append_note(parsed.get("parse_notes"), f"PDF linked from {url}")
+            return parsed
+        except Exception as exc:
+            parsed = parse_question_page(url, html)
+            parsed["parse_status"] = "PARTIAL"
+            parsed["parse_notes"] = f"Linked PDF extraction failed: {exc}"
+            return parsed
+    return parse_question_page(url, html)
 
 
 def resolve_question_asker(raw_name: str, db: Session) -> ResolutionResult | None:
@@ -91,6 +123,10 @@ def upsert_parliamentary_question(db: Session, parsed: dict) -> tuple[Parliament
         "source": source,
         "source_url": parsed["source_url"],
         "archive_path": parsed.get("archive_path"),
+        "source_file_type": parsed.get("source_file_type"),
+        "extracted_text_available": parsed.get("extracted_text_available", False),
+        "parse_status": parsed.get("parse_status"),
+        "parse_notes": parsed.get("parse_notes"),
     }
     created = existing is None
     question = existing or ParliamentaryQuestion()
@@ -123,10 +159,7 @@ def ingest_parliamentary_question_urls(db: Session, urls: list[str]) -> dict:
     db.commit()
     for url in urls:
         try:
-            html = fetch_page(url)
-            if not html:
-                raise ValueError("Fetch failed or returned empty HTML.")
-            parsed = parse_question_page(url, html)
+            parsed = parse_question_source(url)
             _, created = upsert_parliamentary_question(db, parsed)
             _bump(summary, created)
             summary["processed_count"] += 1
@@ -271,6 +304,40 @@ def _label_fields(text: str) -> dict[str, str]:
     return fields
 
 
+def _parsed_from_text(
+    url: str,
+    text: str,
+    title: str | None,
+    archive_path: str,
+    source_file_type: str,
+    parse_status: str | None = None,
+    parse_notes: str | None = None,
+) -> dict:
+    fields = _label_fields(text)
+    question_text, answer_text = _split_question_answer(text, fields)
+    asked_by_name = _first(fields, "asked_by", "asked by", "member", "mp", "question by")
+    inferred_status = _first(fields, "status") or ("ANSWERED" if answer_text else "UNANSWERED")
+    return {
+        "question_number": _limit_string(_extract_question_number(text, fields), 100),
+        "title": _limit_string(title, 500),
+        "asked_by_name": _limit_string(_clean_person_value(asked_by_name) if asked_by_name else None, 255),
+        "department": _limit_string(_first(fields, "department", "portfolio", "to department"), 255),
+        "minister": _limit_string(_clean_person_value(_first(fields, "minister", "answered by", "reply by")), 255),
+        "question_text": question_text,
+        "answer_text": answer_text,
+        "asked_date": _parse_date(_first(fields, "asked date", "date asked", "question date", "asked on")),
+        "answered_date": _parse_date(_first(fields, "answered date", "date answered", "reply date", "answered on")),
+        "status": _limit_string(inferred_status, 100),
+        "source_url": url,
+        "archive_path": archive_path,
+        "source_file_type": source_file_type,
+        "extracted_text_available": bool(text),
+        "parse_status": parse_status or ("PARSED" if text else "PARTIAL"),
+        "parse_notes": parse_notes,
+        "raw_text": text,
+    }
+
+
 def _split_question_answer(text: str, fields: dict[str, str]) -> tuple[str | None, str | None]:
     question = _first(fields, "question")
     answer = _first(fields, "answer", "reply")
@@ -290,6 +357,48 @@ def _title(soup: BeautifulSoup, fields: dict[str, str], url: str) -> str | None:
         return soup.title.get_text(" ", strip=True)
     number = _first(fields, "question number", "question no", "number")
     return f"Parliamentary question {number}" if number else f"Parliamentary question: {url}"
+
+
+def _title_from_pdf_url(url: str) -> str:
+    parsed = urlparse(url)
+    name = Path(parsed.path.rstrip("/")).name
+    if name:
+        return Path(name).stem.replace("-", " ").replace("_", " ").strip() or f"Parliamentary question PDF: {url}"
+    return f"Parliamentary question PDF: {url}"
+
+
+def _first_pdf_link(page_url: str, html: str) -> str | None:
+    soup = BeautifulSoup(html or "", "html.parser")
+    for link in soup.find_all("a", href=True):
+        href = str(link["href"]).strip()
+        text = link.get_text(" ", strip=True).lower()
+        if is_pdf_url(href) or ".pdf" in href.lower() or "pdf" in text:
+            return urljoin(page_url, href)
+    return None
+
+
+def _append_note(existing: str | None, note: str) -> str:
+    return f"{existing}; {note}" if existing else note
+
+
+def _extract_question_number(text: str, fields: dict[str, str]) -> str | None:
+    labelled = _first(fields, "question number", "question no", "number", "no")
+    if labelled:
+        compact = re.search(r"\b([A-Z]{0,4}\s*\d{1,6}(?:/\d{1,6})?)\b", labelled, flags=re.IGNORECASE)
+        return " ".join(compact.group(1).split()) if compact else None
+    match = re.search(r"\b(?:question|parliamentary question)\s+(?:number|no\.?|num)?\s*[:#]?\s*([A-Z]{0,4}\s*\d+/?\d*)", text, flags=re.IGNORECASE)
+    if match:
+        return " ".join(match.group(1).split())
+    return None
+
+
+def _limit_string(value: str | None, limit: int) -> str | None:
+    if value is None:
+        return None
+    value = " ".join(str(value).split())
+    if not value:
+        return None
+    return value[:limit]
 
 
 def _first(fields: dict[str, str], *keys: str) -> str | None:
