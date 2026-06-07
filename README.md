@@ -11,6 +11,7 @@ It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, fr
 - Seed fallback data for demos.
 - Real People's Assembly MP profile ingestion.
 - Real PMG committee meeting/document ingestion.
+- Parliamentary questions ingestion for source-backed MP questions and answers.
 - Bulk People's Assembly URL discovery for current MP profiles.
 - Bulk PMG URL discovery from PMG search pages.
 - Raw HTML archiving under `backend/data/raw/`.
@@ -18,6 +19,7 @@ It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, fr
 - Ingestion run/error logging for API and CLI batches.
 - Quality summary endpoint and CLI report.
 - Browse endpoints for parties, committees, and documents.
+- Browse endpoints for parliamentary questions.
 - Basic pytest coverage for the main product path.
 
 ## Tech Stack
@@ -47,6 +49,7 @@ backend/
   data/
     people_assembly_urls.txt
     pmg_urls.txt
+    parliamentary_question_urls.txt
     raw/
   scripts/
   tests/
@@ -114,6 +117,16 @@ Batch endpoints are idempotent and return:
 
 One failed URL does not stop the batch.
 
+Parliamentary questions:
+
+```bash
+curl -X POST http://localhost:8000/ingest/parliamentary-questions \
+  -H "Content-Type: application/json" \
+  -d '{"urls":["https://www.parliament.gov.za/questions-and-replies"]}'
+```
+
+Question ingestion preserves the original `asked_by_name`, links to a politician when entity resolution is confident, stores unresolved MP names in `unresolved_entities`, and keeps the source URL and archive path as evidence.
+
 Every API ingestion call creates an ingestion run record. Inspect recent runs with:
 
 ```bash
@@ -128,6 +141,7 @@ Edit these files, one URL per line:
 ```text
 backend/data/people_assembly_urls.txt
 backend/data/pmg_urls.txt
+backend/data/parliamentary_question_urls.txt
 ```
 
 Run CLI ingestion from the project root:
@@ -135,6 +149,7 @@ Run CLI ingestion from the project root:
 ```bash
 python backend/scripts/ingest_people_assembly.py backend/data/people_assembly_urls.txt
 python backend/scripts/ingest_pmg_documents.py backend/data/pmg_urls.txt
+python backend/scripts/ingest_parliamentary_questions.py backend/data/parliamentary_question_urls.txt
 ```
 
 Inside the Docker backend container, use container-relative paths:
@@ -142,6 +157,7 @@ Inside the Docker backend container, use container-relative paths:
 ```bash
 docker compose exec backend python scripts/ingest_people_assembly.py data/people_assembly_urls.txt
 docker compose exec backend python scripts/ingest_pmg_documents.py data/pmg_urls.txt
+docker compose exec backend python scripts/ingest_parliamentary_questions.py data/parliamentary_question_urls.txt
 ```
 
 ## Bulk Discovery Ingestion
@@ -176,6 +192,7 @@ Raw HTML archives are written to:
 ```text
 backend/data/raw/people_assembly/
 backend/data/raw/pmg/
+backend/data/raw/parliament_questions/
 ```
 
 PMG documents store `archive_path`. People's Assembly profile pages are also stored as `MP_PROFILE` documents with source evidence.
@@ -195,7 +212,7 @@ python backend/scripts/quality_check.py
 ```
 
 The report includes totals for politicians, parties, committees, memberships, documents, mentions, and records missing important links.
-It also reports active/inactive politician counts, alias count, ingestion runs/errors, missing archive paths, and duplicate slug/source URL checks.
+It also reports active/inactive politician counts, alias count, parliamentary question counts, unresolved entity counts, ingestion runs/errors, missing archive paths, and duplicate slug/source URL checks.
 
 ## Tests
 
@@ -227,6 +244,10 @@ curl "http://localhost:8000/committees?limit=50&offset=0"
 curl http://localhost:8000/committees/{committee_id}/politicians
 curl "http://localhost:8000/documents?limit=50&offset=0"
 curl http://localhost:8000/documents/{document_id}
+curl "http://localhost:8000/questions?limit=50&offset=0"
+curl "http://localhost:8000/questions?department=Basic%20Education"
+curl http://localhost:8000/questions/{question_id}
+curl "http://localhost:8000/politicians/{politician_id}/questions?limit=50&offset=0"
 curl "http://localhost:8000/ingestion/runs?limit=20&offset=0"
 curl http://localhost:8000/quality/summary
 ```
@@ -238,10 +259,12 @@ curl http://localhost:8000/quality/summary
 - If host port `5432` is busy, this project is still fine because PostgreSQL is not exposed on the host.
 - If a source URL fails, retry later; the batch response lists failed URLs without stopping successful ones.
 - If PMG pages have no mentions, seed or ingest relevant PA politicians first so entity resolution has known names and aliases.
+- If a parliamentary question source names an MP in a format that cannot be resolved, the question still stores `asked_by_name` and an `unresolved_entities` row for later cleanup.
 
 ## Roadmap
 
 - Broader official Parliament source ingestion.
+- richer parliamentary question parsing for PDFs and source-specific layouts.
 - richer committee history and roles.
 - document source classification.
 - confidence/audit UI.
