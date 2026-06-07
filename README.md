@@ -12,6 +12,7 @@ It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, fr
 - Real People's Assembly MP profile ingestion.
 - Real PMG committee meeting/document ingestion.
 - Parliamentary questions ingestion for source-backed MP questions and answers.
+- PDF extraction for parliamentary question papers/replies and archive pages that link to PDFs.
 - Bulk People's Assembly URL discovery for current MP profiles.
 - Bulk PMG URL discovery from PMG search pages.
 - Raw HTML archiving under `backend/data/raw/`.
@@ -20,6 +21,7 @@ It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, fr
 - Quality summary endpoint and CLI report.
 - Browse endpoints for parties, committees, and documents.
 - Browse endpoints for parliamentary questions.
+- Discovery scripts for parliamentary question listings and PDF sources.
 - Basic pytest coverage for the main product path.
 
 ## Tech Stack
@@ -126,6 +128,7 @@ curl -X POST http://localhost:8000/ingest/parliamentary-questions \
 ```
 
 Question ingestion preserves the original `asked_by_name`, links to a politician when entity resolution is confident, stores unresolved MP names in `unresolved_entities`, and keeps the source URL and archive path as evidence.
+It supports direct PDF URLs, HTML pages that link to PDFs, and Parliament archive pages with downloadable PDFs. PDF files are archived before extraction.
 
 Every API ingestion call creates an ingestion run record. Inspect recent runs with:
 
@@ -158,6 +161,23 @@ Inside the Docker backend container, use container-relative paths:
 docker compose exec backend python scripts/ingest_people_assembly.py data/people_assembly_urls.txt
 docker compose exec backend python scripts/ingest_pmg_documents.py data/pmg_urls.txt
 docker compose exec backend python scripts/ingest_parliamentary_questions.py data/parliamentary_question_urls.txt
+```
+
+Discover and ingest parliamentary question sources:
+
+```bash
+docker compose exec backend python scripts/discover_parliamentary_questions.py --limit 100 --dry-run
+docker compose exec backend python scripts/discover_parliamentary_questions.py --limit 100
+docker compose exec backend python scripts/ingest_all_parliamentary_questions.py --limit 50 --sleep 0.5
+```
+
+Useful question discovery flags:
+
+```text
+--file data/parliamentary_question_urls.txt
+--limit 100
+--dry-run
+--year 2026
 ```
 
 ## Bulk Discovery Ingestion
@@ -193,6 +213,7 @@ Raw HTML archives are written to:
 backend/data/raw/people_assembly/
 backend/data/raw/pmg/
 backend/data/raw/parliament_questions/
+backend/data/raw/pdfs/
 ```
 
 PMG documents store `archive_path`. People's Assembly profile pages are also stored as `MP_PROFILE` documents with source evidence.
@@ -212,7 +233,7 @@ python backend/scripts/quality_check.py
 ```
 
 The report includes totals for politicians, parties, committees, memberships, documents, mentions, and records missing important links.
-It also reports active/inactive politician counts, alias count, parliamentary question counts, unresolved entity counts, ingestion runs/errors, missing archive paths, and duplicate slug/source URL checks.
+It also reports active/inactive politician counts, alias count, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity counts, ingestion runs/errors, missing archive paths, and duplicate slug/source URL checks.
 
 ## Tests
 
@@ -260,11 +281,12 @@ curl http://localhost:8000/quality/summary
 - If a source URL fails, retry later; the batch response lists failed URLs without stopping successful ones.
 - If PMG pages have no mentions, seed or ingest relevant PA politicians first so entity resolution has known names and aliases.
 - If a parliamentary question source names an MP in a format that cannot be resolved, the question still stores `asked_by_name` and an `unresolved_entities` row for later cleanup.
+- If a PDF has no extractable text or extraction fails, the PDF is still archived and the question record is kept with `parse_status` and `parse_notes`.
 
 ## Roadmap
 
 - Broader official Parliament source ingestion.
-- richer parliamentary question parsing for PDFs and source-specific layouts.
+- richer parliamentary question parsing for scanned PDFs, reply/question matching, and source-specific layouts.
 - richer committee history and roles.
 - document source classification.
 - confidence/audit UI.

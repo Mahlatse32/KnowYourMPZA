@@ -33,6 +33,10 @@ class ParliamentaryQuestionResponse(BaseModel):
     status: str | None = None
     source_url: str
     archive_path: str | None = None
+    source_file_type: str | None = None
+    extracted_text_available: bool = False
+    parse_status: str | None = None
+    parse_notes: str | None = None
     politician: PoliticianRead | None = None
     source: SourceRead | None = None
     created_at: datetime

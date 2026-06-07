@@ -1,7 +1,7 @@
 # KnowYourMPZA Backend
 
 FastAPI backend for verified South African MP data. It ingests People's Assembly profiles and PMG documents, archives fetched HTML, resolves MP aliases, and exposes quality/API endpoints.
-It also ingests parliamentary questions as source-backed backend data without adding AI, chatbot, frontend, auth, or search infrastructure.
+It also ingests parliamentary questions as source-backed backend data, including direct PDF URLs and archive pages that link to PDFs, without adding AI, chatbot, frontend, auth, or search infrastructure.
 
 ## Run
 
@@ -32,6 +32,25 @@ python scripts/ingest_parliamentary_questions.py data/parliamentary_question_url
 ```
 
 Parliamentary question ingestion stores `parliamentary_questions`, `question_mentions`, and unresolved MP names in `unresolved_entities`. It preserves `asked_by_name`, `source_url`, and `archive_path` even when the asker cannot be linked to a politician yet.
+PDF files are archived under `data/raw/parliament_questions/` and `data/raw/pdfs/` before text extraction.
+
+## Parliamentary Question Discovery
+
+```bash
+python scripts/discover_parliamentary_questions.py --limit 100 --dry-run
+python scripts/discover_parliamentary_questions.py --limit 100
+python scripts/ingest_all_parliamentary_questions.py --limit 50 --sleep 0.5
+```
+
+Useful flags:
+
+```text
+--file data/parliamentary_question_urls.txt
+--limit 100
+--dry-run
+--year 2026
+--sleep 0.5
+```
 
 ## Bulk Source Discovery
 
@@ -83,9 +102,9 @@ python scripts/quality_check.py
 curl http://localhost:8000/quality/summary
 ```
 
-The quality summary includes totals, alias coverage, parliamentary question counts, unresolved entity counts, active/inactive politician status, ingestion run/error counts, archive-path coverage, and duplicate slug/source URL checks.
+The quality summary includes totals, alias coverage, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity counts, active/inactive politician status, ingestion run/error counts, archive-path coverage, and duplicate slug/source URL checks.
 
-Known limitation: parliamentary question parsing is defensive HTML/text parsing. PDF-specific extraction and richer source-layout handling should be the next data milestone.
+Known limitation: parliamentary question PDF parsing is text extraction first. Scanned PDFs, detailed question/reply matching, and source-specific layouts still need deeper handling.
 
 ## Tests
 
