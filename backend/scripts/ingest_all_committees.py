@@ -6,14 +6,14 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import SessionLocal
-from app.ingestion.people_assembly import discover_people_assembly_mp_urls, normalize_people_assembly_url
+from app.ingestion.people_assembly import discover_people_assembly_committee_urls, normalize_people_assembly_url
 from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
-from app.services.ingestion_service import ingest_people_assembly_profiles
+from app.services.ingestion_service import ingest_people_assembly_committees
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--file", default="data/people_assembly_urls.txt")
+    parser.add_argument("--file", default="data/committee_urls.txt")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sleep", type=float, default=0.5)
@@ -23,7 +23,7 @@ def main() -> None:
 
     path = Path(args.file)
     existing_urls = _read_urls(path)
-    discovered_urls = discover_people_assembly_mp_urls()
+    discovered_urls = discover_people_assembly_committee_urls()
     if args.write_discovered:
         _write_merged_urls(path, existing_urls, discovered_urls)
     urls = sorted({normalize_people_assembly_url(url) for url in existing_urls + discovered_urls})
@@ -39,10 +39,10 @@ def main() -> None:
 
     total = _summary()
     with SessionLocal() as db:
-        run = start_ingestion_run(db, "People's Assembly", "bulk_people_assembly", len(urls))
+        run = start_ingestion_run(db, "People's Assembly", "bulk_committees", len(urls))
         for index, url in enumerate(urls, start=1):
             print(f"[{index}/{len(urls)}] {url}")
-            part = ingest_people_assembly_profiles(db, [url])
+            part = ingest_people_assembly_committees(db, [url])
             _merge(total, part)
             time.sleep(args.sleep)
         finish_ingestion_run(db, run, total)

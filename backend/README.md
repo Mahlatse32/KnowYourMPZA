@@ -57,7 +57,13 @@ Useful flags:
 Discover and ingest source-backed records in batches:
 
 ```bash
-python scripts/ingest_all_people_assembly.py --limit 50
+python scripts/ingest_all_people_assembly.py --limit 100
+python scripts/ingest_all_people_assembly.py --discover-only
+python scripts/ingest_all_people_assembly.py --write-discovered
+python scripts/ingest_all_committees.py --limit 100
+python scripts/ingest_all_committees.py --discover-only
+python scripts/ingest_all_committees.py --write-discovered
+python scripts/regenerate_aliases.py
 python scripts/ingest_all_pmg.py --limit 50
 ```
 
@@ -69,9 +75,13 @@ Useful flags:
 --limit 50
 --dry-run
 --sleep 0.5
+--discover-only
+--write-discovered
 ```
 
-The bulk scripts merge URLs from local text files with discovered URLs, archive raw HTML, continue after failed URLs, and record ingestion runs/errors.
+The bulk scripts merge URLs from local text files with discovered URLs, archive raw HTML, continue after failed URLs, and record ingestion runs/errors. `--write-discovered` updates `data/people_assembly_urls.txt` or `data/committee_urls.txt` with canonical discovered URLs without duplicates.
+
+People’s Assembly ingestion stores source status and last-seen timestamps, normalizes party names/short names, preserves profile/photo URLs, and updates existing politicians by profile URL or slug. Committee ingestion normalizes committee names and roles, upserts memberships, and creates `unresolved_entities` rows for member names that cannot be safely resolved.
 
 ## Ingestion Runs
 
@@ -99,12 +109,30 @@ curl "http://localhost:8000/politicians/{politician_id}/questions?limit=50&offse
 
 ```bash
 python scripts/quality_check.py
+python scripts/dataset_report.py
 curl http://localhost:8000/quality/summary
+curl http://localhost:8000/quality/issues
 ```
 
-The quality summary includes totals, alias coverage, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity counts, active/inactive politician status, ingestion run/error counts, archive-path coverage, and duplicate slug/source URL checks.
+The quality summary includes totals, alias coverage, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity status counts, active/inactive/unknown politician status, ingestion run/error counts, archive-path coverage, committees without memberships, and duplicate slug/party/membership/source URL checks.
+
+`/quality/issues` returns structured cleanup queues. `scripts/dataset_report.py` writes `reports/dataset_report.json`, which is ignored by Git for milestone tracking.
+
+## Unresolved Entities
+
+```bash
+curl "http://localhost:8000/unresolved-entities?status=OPEN"
+curl http://localhost:8000/unresolved-entities/{entity_id}
+curl -X POST http://localhost:8000/unresolved-entities/{entity_id}/resolve \
+  -H "Content-Type: application/json" \
+  -d '{"politician_id":"POLITICIAN_UUID","create_alias":true,"alias_type":"SOURCE_VARIANT","notes":"Resolved from committee page"}'
+curl -X POST http://localhost:8000/unresolved-entities/{entity_id}/ignore \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"Not an MP"}'
+```
 
 Known limitation: parliamentary question PDF parsing is text extraction first. Scanned PDFs, detailed question/reply matching, and source-specific layouts still need deeper handling.
+Committee discovery currently uses People’s Assembly committee/organisation pages and may include historical committees; quality reports show remaining cleanup gaps.
 
 ## Tests
 
