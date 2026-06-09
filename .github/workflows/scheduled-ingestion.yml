@@ -1,0 +1,48 @@
+name: Scheduled ingestion
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "15 3 * * *"
+    - cron: "45 4 * * 0"
+
+jobs:
+  daily:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '15 3 * * *'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      INGESTION_ENABLED: ${{ secrets.INGESTION_ENABLED }}
+      SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
+      MAX_DAILY_INGESTION_URLS: ${{ vars.MAX_DAILY_INGESTION_URLS || '50' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: python scripts/run_daily_ingestion.py
+
+  weekly:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 4 * * 0'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      INGESTION_ENABLED: ${{ secrets.INGESTION_ENABLED }}
+      SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
+      MAX_WEEKLY_INGESTION_URLS: ${{ vars.MAX_WEEKLY_INGESTION_URLS || '100' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+      - run: python scripts/run_weekly_ingestion.py

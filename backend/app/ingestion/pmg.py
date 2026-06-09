@@ -3,11 +3,12 @@ import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 from bs4 import BeautifulSoup
 
 from app.ingestion.people_assembly import create_slug, extract_text, fetch_page, normalize_name
+from app.services.archive_storage import get_archive_storage
 
 
 @dataclass
@@ -18,27 +19,35 @@ class ParsedPmgDocument:
     publication_date: date | None
     raw_text: str
     archive_path: str
+    committee_name: str | None = None
 
 
 def archive_html(url: str, html: str, base_dir: str | Path = "data/raw/pmg") -> str:
     path = _archive_path(url, base_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(html, encoding="utf-8")
-    return str(path)
+    return get_archive_storage().write_text(str(path), html)
 
 
-def discover_pmg_document_urls(search_terms: list[str] | None = None, limit: int = 100) -> list[str]:
+def discover_pmg_document_urls(
+    search_terms: list[str] | None = None,
+    limit: int = 100,
+    year: int | None = None,
+    committee: str | None = None,
+) -> list[str]:
     terms = search_terms or ["Malema", "Ramaphosa", "Steenhuisen", "Gwarube", "Hlabisa", "Groenewald"]
     urls: set[str] = set()
+    listing_urls = _pmg_listing_urls(year=year, committee=committee)
+    for listing_url in listing_urls:
+        html = fetch_page(listing_url)
+        urls.update(_extract_pmg_urls(listing_url, html))
+        if len(urls) >= limit:
+            return sorted(urls)[:limit]
     for term in terms:
-        html = fetch_page(f"https://pmg.org.za/search/?q={term}")
-        if not html:
-            continue
-        for match in re.findall(r"/committee-meeting/\d+/", html):
-            urls.add(f"https://pmg.org.za{match}")
-            if len(urls) >= limit:
-                return sorted(urls)
-    return sorted(urls)
+        query = quote_plus(f"{term} {committee or ''} {year or ''}".strip())
+        html = fetch_page(f"https://pmg.org.za/search/?q={query}")
+        urls.update(_extract_pmg_urls("https://pmg.org.za/search/", html))
+        if len(urls) >= limit:
+            return sorted(urls)[:limit]
+    return sorted(urls)[:limit]
 
 
 def parse_document(url: str, html: str, archive_path: str) -> ParsedPmgDocument:
@@ -47,12 +56,55 @@ def parse_document(url: str, html: str, archive_path: str) -> ParsedPmgDocument:
     raw_text = extract_text(html)
     return ParsedPmgDocument(
         title=title,
-        document_type="pmg_committee_meeting",
+        document_type=_document_type(url, title, raw_text),
         source_url=url,
         publication_date=_extract_publication_date(soup, raw_text),
         raw_text=raw_text,
         archive_path=archive_path,
+        committee_name=_extract_committee_name(soup, raw_text),
     )
+
+
+def _pmg_listing_urls(year: int | None = None, committee: str | None = None) -> list[str]:
+    base = [
+        "https://pmg.org.za/committee-meetings/",
+        "https://pmg.org.za/tabled-committee-reports/",
+        "https://pmg.org.za/briefing/",
+        "https://pmg.org.za/committees/",
+    ]
+    urls: list[str] = []
+    for url in base:
+        urls.append(url)
+        for page in range(2, 6):
+            urls.append(f"{url}?page={page}")
+    if year:
+        urls.extend([f"https://pmg.org.za/committee-meetings/?year={year}", f"https://pmg.org.za/search/?q={year}"])
+    if committee:
+        urls.append(f"https://pmg.org.za/search/?q={quote_plus(committee)}")
+    return urls
+
+
+def _extract_pmg_urls(base_url: str, html: str) -> set[str]:
+    if not html:
+        return set()
+    soup = BeautifulSoup(html, "html.parser")
+    urls: set[str] = set()
+    patterns = (
+        r"/committee-meeting/\d+/?",
+        r"/committee-report/\d+/?",
+        r"/tabled-committee-report/\d+/?",
+        r"/briefing/\d+/?",
+    )
+    for link in soup.find_all("a", href=True):
+        href = urljoin(base_url, str(link["href"]).strip())
+        path = urlparse(href).path
+        if any(re.fullmatch(pattern, path) for pattern in patterns):
+            urls.add(f"https://pmg.org.za{path if path.endswith('/') else path + '/'}")
+    for pattern in patterns:
+        for match in re.findall(pattern, html):
+            path = match if match.endswith("/") else f"{match}/"
+            urls.add(f"https://pmg.org.za{path}")
+    return urls
 
 
 def _extract_title(soup: BeautifulSoup) -> str:
@@ -82,6 +134,35 @@ def _extract_publication_date(soup: BeautifulSoup, raw_text: str) -> date | None
                 return _parse_date(match.group(1))
     match = re.search(r"\b(\d{1,2} [A-Z][a-z]+ \d{4})\b", raw_text)
     return _parse_date(match.group(1)) if match else None
+
+
+def _extract_committee_name(soup: BeautifulSoup, raw_text: str) -> str | None:
+    for selector in [".committee-name", ".committee", "a[href*='/committee/']", "a[href*='/committees/']"]:
+        node = soup.select_one(selector)
+        if node and node.get_text(strip=True):
+            return " ".join(node.get_text(" ", strip=True).split())[:255]
+    match = re.search(r"\b(Portfolio Committee on [A-Za-z ,&-]+|Standing Committee on [A-Za-z ,&-]+)\b", raw_text)
+    if not match:
+        return None
+    return re.sub(r"\s+(meeting|briefing|report)\s*$", "", match.group(1), flags=re.IGNORECASE)[:255]
+
+
+def _document_type(url: str, title: str, raw_text: str) -> str:
+    path = urlparse(url).path.lower()
+    if "committee-meeting" in path:
+        return "PMG_COMMITTEE_MEETING"
+    if "report" in path:
+        return "PMG_REPORT"
+    if "briefing" in path:
+        return "PMG_BRIEFING"
+    lowered = f"{url} {title} {raw_text[:500]}".lower()
+    if "report" in lowered:
+        return "PMG_REPORT"
+    if "briefing" in lowered:
+        return "PMG_BRIEFING"
+    if "committee-meeting" in lowered or "meeting" in lowered:
+        return "PMG_COMMITTEE_MEETING"
+    return "PMG_DOCUMENT"
 
 
 def _parse_date(value: str) -> date | None:

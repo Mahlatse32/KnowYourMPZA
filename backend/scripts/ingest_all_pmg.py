@@ -17,13 +17,24 @@ def main() -> None:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--sleep", type=float, default=0.5)
+    parser.add_argument("--discover-only", action="store_true")
+    parser.add_argument("--write-discovered", action="store_true")
+    parser.add_argument("--year", type=int, default=None)
+    parser.add_argument("--committee", default=None)
     args = parser.parse_args()
 
-    urls = sorted(set(_read_urls(Path(args.file)) + discover_pmg_document_urls(limit=100)))
+    path = Path(args.file)
+    existing_urls = _read_urls(path)
+    discovered_urls = discover_pmg_document_urls(limit=max(args.limit or 100, 100), year=args.year, committee=args.committee)
+    if args.write_discovered:
+        _write_merged_urls(path, existing_urls, discovered_urls)
+    urls = sorted(set(existing_urls + discovered_urls))
     if args.limit:
         urls = urls[: args.limit]
+    print(f"existing_count: {len(existing_urls)}")
+    print(f"newly_discovered_count: {len(set(discovered_urls) - set(existing_urls))}")
     print(f"discovered_count: {len(urls)}")
-    if args.dry_run:
+    if args.dry_run or args.discover_only:
         for url in urls:
             print(url)
         return
@@ -44,6 +55,13 @@ def _read_urls(path: Path) -> list[str]:
     if not path.exists():
         return []
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
+
+
+def _write_merged_urls(path: Path, existing: list[str], discovered: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    merged = sorted(set(existing + discovered))
+    path.write_text("\n".join(merged) + ("\n" if merged else ""), encoding="utf-8")
+    print(f"wrote_url_count: {len(merged)}")
 
 
 def _summary() -> dict:

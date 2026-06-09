@@ -14,6 +14,7 @@ class DocumentRead(BaseModel):
     source_url: str
     archive_path: str | None = None
     publication_date: date | None = None
+    committee_name: str | None = None
     raw_text: str | None = None
     source: SourceRead
     created_at: datetime
@@ -27,6 +28,7 @@ class DocumentMentionRead(BaseModel):
     snippet: str
     source_url: str
     confidence_score: float
+    match_reason: str | None = None
     document: DocumentRead
     created_at: datetime
     updated_at: datetime
@@ -39,6 +41,7 @@ class DocumentMentionWithPoliticianRead(BaseModel):
     snippet: str
     source_url: str
     confidence_score: float
+    match_reason: str | None = None
     politician: PoliticianRead
     created_at: datetime
     updated_at: datetime

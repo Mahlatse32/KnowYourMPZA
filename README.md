@@ -2,7 +2,9 @@
 
 KnowYourMPZA is a verified South African political data backend. It stores MPs, parties, committee memberships, source documents, raw HTML archives, aliases, and document mentions so downstream products can answer evidence-backed questions about Members of Parliament.
 
-It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, frontend UI, authentication, payments, and voting records.
+It is not a chatbot. V1 intentionally excludes AI, OpenSearch, pgvector, authentication, payments, bills, and voting records.
+
+V1 adds a simple public website for searching and browsing the source-backed dataset. V1 still intentionally excludes LLM summaries, chat, authentication, payments, bills, and voting records.
 
 ## MVP Features
 
@@ -23,6 +25,8 @@ It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, fr
 - Quality summary endpoint and CLI report.
 - Quality issues endpoint for structured cleanup queues.
 - Dataset report script for milestone tracking.
+- Public React/Vite frontend under `frontend/`.
+- CI and guarded scheduled ingestion workflows.
 - Browse endpoints for parties, committees, and documents.
 - Browse endpoints for parliamentary questions.
 - Discovery scripts for parliamentary question listings and PDF sources.
@@ -71,6 +75,20 @@ docker compose up --build
 ```
 
 The API runs at `http://localhost:8000`. PostgreSQL is internal to Compose and persists in a Docker volume.
+
+## Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Set `VITE_API_BASE_URL` when the backend is not running on `http://localhost:8000`.
+
+```bash
+npm run build
+```
 
 ## Migrations
 
@@ -222,6 +240,8 @@ Useful flags:
 --sleep 0.5
 --discover-only
 --write-discovered
+--year 2026
+--committee Health
 ```
 
 `--write-discovered` appends newly discovered canonical URLs to the relevant local URL list without duplicating existing lines:
@@ -253,6 +273,8 @@ API:
 ```bash
 curl http://localhost:8000/quality/summary
 curl http://localhost:8000/quality/issues
+curl http://localhost:8000/quality/duplicates
+curl http://localhost:8000/quality/archive-gaps
 ```
 
 CLI:
@@ -298,6 +320,48 @@ Inside Docker:
 docker compose exec backend pytest
 ```
 
+## Scheduled Ingestion
+
+GitHub Actions includes CI and a guarded scheduled ingestion workflow. Scheduled ingestion exits unless these variables are explicitly configured:
+
+```text
+DATABASE_URL
+INGESTION_ENABLED=true
+SOURCE_RATE_LIMIT_SLEEP
+MAX_DAILY_INGESTION_URLS
+MAX_WEEKLY_INGESTION_URLS
+```
+
+Daily ingestion runs PMG discovery/ingestion, parliamentary question ingestion, quality checks, and dataset report generation.
+Weekly ingestion refreshes People’s Assembly MPs, committees, aliases, and the dataset report.
+
+## Production Deployment
+
+The backend Dockerfile runs `alembic upgrade head` before starting Uvicorn and respects an external `DATABASE_URL`, so it can run on Render, Railway, Fly.io, or similar Docker hosts with managed PostgreSQL.
+
+Minimum production environment:
+
+```text
+DATABASE_URL=postgresql+psycopg://...
+ENVIRONMENT=production
+CORS_ORIGIN=https://your-frontend.example
+```
+
+Health checks:
+
+```bash
+curl https://your-api.example/health
+curl https://your-api.example/health/ready
+```
+
+Backup examples:
+
+```bash
+pg_dump "$DATABASE_URL" > backups/knowyourmpza.sql
+psql "$DATABASE_URL" < backups/knowyourmpza.sql
+tar -czf backups/raw-archives.tgz backend/data/raw
+```
+
 ## API Examples
 
 ```bash
@@ -321,8 +385,21 @@ curl "http://localhost:8000/politicians/{politician_id}/questions?limit=50&offse
 curl "http://localhost:8000/ingestion/runs?limit=20&offset=0"
 curl http://localhost:8000/quality/summary
 curl http://localhost:8000/quality/issues
+curl http://localhost:8000/quality/duplicates
+curl http://localhost:8000/quality/archive-gaps
 curl "http://localhost:8000/unresolved-entities?status=OPEN"
 ```
+
+## V1 Release Checklist
+
+- [ ] Backend migrations apply on a clean database.
+- [ ] Backend tests pass.
+- [ ] Frontend build passes.
+- [ ] `/health` and `/health/ready` pass.
+- [ ] Quality summary and issues are readable.
+- [ ] PMG, People’s Assembly, committee, and question ingestion smoke tests pass.
+- [ ] Scheduled ingestion secrets are configured or left disabled.
+- [ ] Production `DATABASE_URL` and `CORS_ORIGIN` are set.
 
 ## Troubleshooting
 
@@ -333,6 +410,7 @@ curl "http://localhost:8000/unresolved-entities?status=OPEN"
 - If PMG pages have no mentions, seed or ingest relevant PA politicians first so entity resolution has known names and aliases.
 - If a parliamentary question source names an MP in a format that cannot be resolved, the question still stores `asked_by_name` and an `unresolved_entities` row for later cleanup.
 - If a PDF has no extractable text or extraction fails, the PDF is still archived and the question record is kept with `parse_status` and `parse_notes`.
+- PMG discovery depends on public PMG listing/search availability; not every PMG document contains politician mentions.
 
 ## Roadmap
 
@@ -343,5 +421,4 @@ curl "http://localhost:8000/unresolved-entities?status=OPEN"
 - document source classification.
 - confidence/audit UI.
 - voting records later.
-- frontend later.
 - AI features only after the verified data layer is stable.
