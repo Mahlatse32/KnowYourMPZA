@@ -9,6 +9,8 @@ class CommitteeRead(BaseModel):
     name: str
     slug: str
     description: str | None = None
+    source_url: str | None = None
+    source_last_seen_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -19,6 +21,8 @@ class CommitteeMembershipRead(BaseModel):
     id: uuid.UUID
     role: str | None = None
     source_url: str
+    source_last_seen_at: datetime | None = None
+    source_status: str | None = None
     start_date: date | None = None
     end_date: date | None = None
     committee: CommitteeRead

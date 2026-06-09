@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.ingestion.people_assembly import fetch_page as fetch_people_assembly_page
 from app.ingestion.people_assembly import archive_html as archive_people_assembly_html
-from app.ingestion.people_assembly import profile_is_current_mp
+from app.ingestion.people_assembly import normalize_committee_name, normalize_party_name, normalize_role
+from app.ingestion.people_assembly import parse_committee_page
 from app.ingestion.people_assembly import parse_profile
 from app.ingestion.pmg import archive_html as archive_pmg_html
 from app.ingestion.pmg import fetch_page as fetch_pmg_page
@@ -21,6 +22,7 @@ from app.models.party import Party
 from app.models.politician import Politician
 from app.models.politician_alias import PoliticianAlias
 from app.models.source import Source
+from app.models.unresolved_entity import UnresolvedEntity
 from app.services.entity_resolution import alias_values_for_politician, resolve_politician_name
 
 
@@ -40,17 +42,23 @@ def _upsert_source(db: Session, payload: dict) -> Source:
 
 
 def _upsert_party(db: Session, payload: dict) -> Party:
-    party = _one_by(db, Party, "short_name", payload["short_name"])
+    data = dict(payload)
+    data["name"], data["short_name"] = normalize_party_name(data.get("short_name") or data["name"])
+    if data.get("name") == "Unknown":
+        data["name"] = normalize_party_name(data.get("name", ""))[0]
+    party = _one_by(db, Party, "short_name", data["short_name"])
     if party is None:
-        party = Party(**payload)
+        party = Party(**data)
         db.add(party)
     else:
-        for key, value in payload.items():
+        for key, value in data.items():
             setattr(party, key, value)
     return party
 
 
 def _upsert_committee(db: Session, payload: dict) -> Committee:
+    payload["name"] = normalize_committee_name(payload["name"])
+    payload["slug"] = payload.get("slug") or re.sub(r"[^a-z0-9]+", "-", payload["name"].lower()).strip("-")
     committee = _one_by(db, Committee, "slug", payload["slug"])
     if committee is None:
         committee = Committee(**payload)
@@ -69,6 +77,11 @@ def _upsert_politician(db: Session, payload: dict, party: Party) -> Politician:
         politician = Politician(**data)
         db.add(politician)
     else:
+        if data.get("source_status") == "UNKNOWN" and politician.source_status == "CURRENT":
+            data["source_status"] = politician.source_status
+            data["is_active"] = politician.is_active
+        if not data.get("photo_url") and politician.photo_url:
+            data["photo_url"] = politician.photo_url
         for key, value in data.items():
             setattr(politician, key, value)
     return politician
@@ -117,6 +130,7 @@ def _merge_politicians(db: Session, target: Politician, duplicate: Politician) -
 
 
 def _upsert_membership(db: Session, politician: Politician, committee: Committee, role: str | None, source_url: str):
+    role = normalize_role(role)
     membership = db.scalars(
         select(CommitteeMembership).where(
             CommitteeMembership.politician == politician,
@@ -130,10 +144,14 @@ def _upsert_membership(db: Session, politician: Politician, committee: Committee
             committee=committee,
             role=role,
             source_url=source_url,
+            source_last_seen_at=datetime.now(UTC),
+            source_status="CURRENT",
         )
         db.add(membership)
     else:
         membership.source_url = source_url
+        membership.source_last_seen_at = datetime.now(UTC)
+        membership.source_status = "CURRENT"
     return membership
 
 
@@ -160,6 +178,46 @@ def _ensure_aliases(db: Session, politician: Politician, source_url: str | None 
         _upsert_alias(db, politician, alias, alias_type, source_url)
         count += 1 if before is None else 0
     return count
+
+
+def regenerate_aliases(db: Session) -> int:
+    created = 0
+    for politician in db.scalars(select(Politician).order_by(Politician.display_name)):
+        created += _ensure_aliases(db, politician, politician.profile_url)
+    db.commit()
+    return created
+
+
+def _upsert_unresolved_entity(
+    db: Session,
+    source_name: str,
+    raw_value: str,
+    entity_type: str,
+    source_url: str | None = None,
+    confidence: float | None = None,
+) -> UnresolvedEntity:
+    raw_value = " ".join(raw_value.strip().split())
+    existing = db.scalars(
+        select(UnresolvedEntity).where(
+            UnresolvedEntity.source_name == source_name,
+            UnresolvedEntity.source_url == source_url,
+            UnresolvedEntity.raw_value == raw_value,
+            UnresolvedEntity.entity_type == entity_type,
+        )
+    ).first()
+    if existing is None:
+        existing = UnresolvedEntity(
+            source_name=source_name,
+            source_url=source_url,
+            raw_value=raw_value,
+            entity_type=entity_type,
+            confidence=confidence,
+            status="OPEN",
+        )
+        db.add(existing)
+    elif existing.status == "IGNORED":
+        existing.confidence = confidence
+    return existing
 
 
 def _upsert_document(db: Session, payload: dict, source: Source) -> Document:
@@ -200,7 +258,11 @@ def _upsert_mention(db: Session, document: Document, politician: Politician, pay
 
 def seed_database(db: Session) -> dict[str, int | str]:
     sources = {payload["name"]: _upsert_source(db, payload) for payload in SOURCES}
-    parties = {payload["short_name"]: _upsert_party(db, payload) for payload in PARTIES}
+    parties = {}
+    for payload in PARTIES:
+        party = _upsert_party(db, payload)
+        parties[payload["short_name"]] = party
+        parties[party.short_name] = party
     committees = {payload["slug"]: _upsert_committee(db, payload) for payload in COMMITTEES}
     db.flush()
 
@@ -265,7 +327,6 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
                 raise ValueError("Fetch failed or returned empty HTML.")
             archive_path = archive_people_assembly_html(url, html)
             profile = parse_profile(url, html)
-            is_current = profile_is_current_mp(html)
 
             party = _upsert_party(
                 db,
@@ -274,6 +335,8 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
                     "short_name": profile.party_short_name,
                     "logo_url": None,
                     "website_url": None,
+                    "source_url": profile.profile_url,
+                    "source_last_seen_at": datetime.now(UTC),
                 },
             )
             existing_politician = _one_by(db, Politician, "slug", profile.slug)
@@ -285,9 +348,9 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
                     "slug": profile.slug,
                     "profile_url": profile.profile_url,
                     "photo_url": profile.photo_url,
-                    "is_active": is_current,
+                    "is_active": profile.is_active,
                     "source_last_seen_at": datetime.now(UTC),
-                    "source_status": "current_mp" if is_current else "former_or_inactive",
+                    "source_status": profile.source_status,
                 },
                 party,
             )
@@ -328,6 +391,8 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
                         "name": membership.name,
                         "slug": membership.slug,
                         "description": f"Committee membership extracted from People's Assembly profile.",
+                        "source_url": membership.source_url,
+                        "source_last_seen_at": datetime.now(UTC),
                     },
                 )
                 _bump(summary, existing_committee is None)
@@ -341,6 +406,86 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
                 ).first()
                 row = _upsert_membership(db, politician, committee, membership.role, membership.source_url)
                 row.start_date = membership.start_date
+                _bump(summary, existing_membership is None)
+            summary["processed_count"] += 1
+        except Exception as exc:
+            db.rollback()
+            summary["failed_count"] += 1
+            summary["errors"].append({"url": url, "error": str(exc)})
+        else:
+            db.commit()
+    return summary
+
+
+def ingest_people_assembly_committees(db: Session, urls: list[str]) -> dict:
+    summary = _empty_summary()
+    source = _upsert_source(db, next(payload for payload in SOURCES if payload["name"] == "People's Assembly"))
+    db.commit()
+    for url in urls:
+        try:
+            html = fetch_people_assembly_page(url)
+            if not html:
+                raise ValueError("Fetch failed or returned empty HTML.")
+            archive_path = archive_people_assembly_html(url, html, "data/raw/people_assembly/committees")
+            parsed = parse_committee_page(url, html)
+            existing_committee = _one_by(db, Committee, "slug", parsed.slug)
+            committee = _upsert_committee(
+                db,
+                {
+                    "name": parsed.name,
+                    "slug": parsed.slug,
+                    "description": "Committee extracted from People's Assembly committee page.",
+                    "source_url": parsed.source_url,
+                    "source_last_seen_at": datetime.now(UTC),
+                },
+            )
+            _bump(summary, existing_committee is None)
+            db.flush()
+            document = _upsert_document(
+                db,
+                {
+                    "title": f"People's Assembly committee: {parsed.name}",
+                    "document_type": "COMMITTEE_PAGE",
+                    "source_name": source.name,
+                    "source_url": parsed.source_url,
+                    "archive_path": archive_path,
+                    "publication_date": None,
+                    "raw_text": parsed.name,
+                },
+                source,
+            )
+            db.flush()
+            for member in parsed.members:
+                resolution = resolve_politician_name(db, member.name)
+                if resolution is None:
+                    _upsert_unresolved_entity(
+                        db,
+                        source_name=source.name,
+                        raw_value=member.name,
+                        entity_type="POLITICIAN",
+                        source_url=parsed.source_url,
+                        confidence=0.25,
+                    )
+                    summary["skipped_count"] += 1
+                    continue
+                existing_membership = db.scalars(
+                    select(CommitteeMembership).where(
+                        CommitteeMembership.politician == resolution.politician,
+                        CommitteeMembership.committee == committee,
+                        CommitteeMembership.role == normalize_role(member.role),
+                    )
+                ).first()
+                _upsert_membership(db, resolution.politician, committee, member.role, parsed.source_url)
+                _upsert_mention(
+                    db,
+                    document,
+                    resolution.politician,
+                    {
+                        "snippet": f"{member.name} listed on {parsed.name}.",
+                        "source_url": parsed.source_url,
+                        "confidence_score": resolution.confidence_score,
+                    },
+                )
                 _bump(summary, existing_membership is None)
             summary["processed_count"] += 1
         except Exception as exc:

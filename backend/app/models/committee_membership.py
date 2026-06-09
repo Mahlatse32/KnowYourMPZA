@@ -19,6 +19,8 @@ class CommitteeMembership(Base):
     committee_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("committees.id"), nullable=False, index=True)
     role: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    source_last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_status: Mapped[str | None] = mapped_column(String(100), nullable=True)
     start_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     end_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)

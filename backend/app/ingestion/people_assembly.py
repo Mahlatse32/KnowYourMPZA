@@ -3,12 +3,61 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://www.pa.org.za/"
+DEFAULT_MP_LISTING_URLS = [
+    "https://www.pa.org.za/position/member/parliament/",
+    "https://www.pa.org.za/person/all/",
+]
+DEFAULT_COMMITTEE_LISTING_URLS = [
+    "https://www.pa.org.za/committees/",
+    "https://www.pa.org.za/organisation/national-assembly/",
+]
+PARTY_NORMALIZATIONS = {
+    "african national congress": ("African National Congress", "ANC"),
+    "anc": ("African National Congress", "ANC"),
+    "democratic alliance": ("Democratic Alliance", "DA"),
+    "da": ("Democratic Alliance", "DA"),
+    "economic freedom fighters": ("Economic Freedom Fighters", "EFF"),
+    "eff": ("Economic Freedom Fighters", "EFF"),
+    "umkhonto wesizwe": ("uMkhonto weSizwe", "MK"),
+    "mk": ("uMkhonto weSizwe", "MK"),
+    "inkatha freedom party": ("Inkatha Freedom Party", "IFP"),
+    "ifp": ("Inkatha Freedom Party", "IFP"),
+    "freedom front plus": ("Freedom Front Plus", "FF Plus"),
+    "ff plus": ("Freedom Front Plus", "FF Plus"),
+    "ff+": ("Freedom Front Plus", "FF Plus"),
+    "actionsa": ("ActionSA", "ActionSA"),
+    "good": ("GOOD", "GOOD"),
+    "patriotic alliance": ("Patriotic Alliance", "PA"),
+    "pa": ("Patriotic Alliance", "PA"),
+    "african christian democratic party": ("African Christian Democratic Party", "ACDP"),
+    "acdp": ("African Christian Democratic Party", "ACDP"),
+    "united democratic movement": ("United Democratic Movement", "UDM"),
+    "udm": ("United Democratic Movement", "UDM"),
+    "african transformation movement": ("African Transformation Movement", "ATM"),
+    "atm": ("African Transformation Movement", "ATM"),
+    "rise mzansi": ("Rise Mzansi", "Rise Mzansi"),
+    "build one south africa": ("Build One South Africa", "BOSA"),
+    "bosa": ("Build One South Africa", "BOSA"),
+    "al jama-ah": ("Al Jama-ah", "Al Jama-ah"),
+    "al jamaah": ("Al Jama-ah", "Al Jama-ah"),
+}
+ROLE_NORMALIZATIONS = {
+    "chair": "Chairperson",
+    "chairperson": "Chairperson",
+    "co-chairperson": "Chairperson",
+    "member": "Member",
+    "alternate member": "Alternate",
+    "alternate": "Alternate",
+    "whip": "Whip",
+    "minister": "Minister",
+    "deputy minister": "Deputy Minister",
+}
 
 
 @dataclass
@@ -30,6 +79,16 @@ class ParsedPeopleAssemblyProfile:
     profile_url: str
     photo_url: str | None
     committees: list[ParsedCommitteeMembership]
+    source_status: str = "UNKNOWN"
+    is_active: bool = True
+
+
+@dataclass
+class ParsedCommitteePage:
+    name: str
+    slug: str
+    source_url: str
+    members: list[ParsedCommitteeMembership]
 
 
 def fetch_page(url: str) -> str:
@@ -41,12 +100,51 @@ def fetch_page(url: str) -> str:
         return ""
 
 
-def discover_people_assembly_mp_urls(listing_urls: list[str] | None = None) -> list[str]:
+def normalize_people_assembly_url(url: str) -> str:
+    absolute = urljoin(BASE_URL, str(url).strip())
+    parsed = urlparse(absolute)
+    path = re.sub(r"/+", "/", parsed.path or "/")
+    if not path.endswith("/"):
+        path = f"{path}/"
+    query_pairs = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key.lower() in {"page"}]
+    query = urlencode(sorted(query_pairs))
+    return urlunparse(("https", parsed.netloc.lower(), path, "", query, ""))
+
+
+def discover_people_assembly_listing_pages(listing_urls: list[str] | None = None) -> list[str]:
     from app.config import settings
 
-    urls = listing_urls or settings.people_assembly_listing_urls
+    seeds = listing_urls or settings.people_assembly_listing_urls or DEFAULT_MP_LISTING_URLS
+    pages: set[str] = set()
+    seen: set[str] = set()
+    queue = [normalize_people_assembly_url(url) for url in seeds]
+    while queue:
+        listing_url = queue.pop(0)
+        if listing_url in seen:
+            continue
+        seen.add(listing_url)
+        pages.add(listing_url)
+        html = fetch_page(listing_url)
+        if not html:
+            continue
+        soup = BeautifulSoup(html, "html.parser")
+        for link in soup.find_all("a", href=True):
+            text = link.get_text(" ", strip=True).lower()
+            href = str(link["href"]).strip()
+            candidate = normalize_people_assembly_url(urljoin(listing_url, href))
+            if candidate in seen or candidate in queue:
+                continue
+            parsed = urlparse(candidate)
+            is_same_listing = parsed.path == urlparse(listing_url).path and "page=" in parsed.query
+            is_next = text in {"next", "next page", "older"} or "next" in link.get("class", [])
+            if is_same_listing or is_next:
+                queue.append(candidate)
+    return sorted(pages)
+
+
+def discover_people_assembly_mp_urls(listing_urls: list[str] | None = None) -> list[str]:
     discovered: set[str] = set()
-    for listing_url in urls:
+    for listing_url in discover_people_assembly_listing_pages(listing_urls):
         discovered.update(discover_people_assembly_urls_from_listing(listing_url))
     return sorted(discovered)
 
@@ -59,13 +157,33 @@ def discover_people_assembly_urls_from_listing(listing_url: str) -> list[str]:
     urls: set[str] = set()
     for link in soup.find_all("a", href=True):
         href = link["href"].strip()
-        if not re.fullmatch(r"https?://[^/]+/person/[a-z0-9-]+/|/person/[a-z0-9-]+/", href):
-            continue
-        absolute = urljoin(listing_url, href)
+        absolute = normalize_people_assembly_url(urljoin(listing_url, href))
         parsed = urlparse(absolute)
+        if not re.fullmatch(r"/person/[a-z0-9-]+/", parsed.path):
+            continue
         if parsed.path in {"/person/all/"}:
             continue
-        urls.add(f"{parsed.scheme}://{parsed.netloc}{parsed.path}")
+        urls.add(absolute)
+    return sorted(urls)
+
+
+def discover_people_assembly_committee_urls(listing_urls: list[str] | None = None) -> list[str]:
+    urls: set[str] = set()
+    seeds = listing_urls or DEFAULT_COMMITTEE_LISTING_URLS
+    for listing_url in seeds:
+        html = fetch_page(listing_url)
+        if not html:
+            continue
+        soup = BeautifulSoup(html, "html.parser")
+        for link in soup.find_all("a", href=True):
+            href = str(link["href"]).strip()
+            absolute = normalize_people_assembly_url(urljoin(listing_url, href))
+            path = urlparse(absolute).path
+            if re.fullmatch(r"/committee/[a-z0-9-]+/", path) or re.fullmatch(r"/organisation/[a-z0-9-]+/", path):
+                if not any(skip in path for skip in {"/person/", "/place/", "/messages/", "/party/"}):
+                    if path in {"/organisation/all/", "/organisation/is/", "/organisation/national-assembly/", "/organisation/ncop/"}:
+                        continue
+                    urls.add(absolute)
     return sorted(urls)
 
 
@@ -84,9 +202,39 @@ def normalize_name(name: str) -> str:
 
 def normalize_committee_name(name: str) -> str:
     name = " ".join(name.strip().split())
+    name = re.sub(r"^(committee|portfolio committee|select committee)\s+on\s+", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"^(committee|portfolio committee|select committee)\s+for\s+", "", name, flags=re.IGNORECASE)
     name = re.sub(r"\s+([,.;:])", r"\1", name)
     name = re.sub(r"([,.;:]){2,}", r"\1", name)
-    return name
+    return name.strip(" -,.;:")
+
+
+def normalize_party_name(value: str) -> tuple[str, str]:
+    clean = re.sub(r"\s+", " ", value.replace("\u00a0", " ")).strip(" .,-")
+    if not clean:
+        return "Unknown", "UNKNOWN"
+    match = re.match(r"(.+?)\s*\(([^)]+)\)\s*$", clean)
+    if match:
+        long_name, short_name = match.group(1).strip(), match.group(2).strip()
+    else:
+        long_name, short_name = clean, clean
+    key = re.sub(r"[^a-z0-9+]+", " ", short_name.lower()).strip()
+    normalized = PARTY_NORMALIZATIONS.get(key) or PARTY_NORMALIZATIONS.get(re.sub(r"[^a-z0-9+]+", " ", long_name.lower()).strip())
+    if normalized:
+        return normalized
+    generated_short = short_name if len(short_name) <= 20 and short_name.isupper() else create_slug(short_name).upper()[:20]
+    return " ".join(long_name.split()), generated_short
+
+
+def normalize_role(value: str | None) -> str:
+    if not value:
+        return "Member"
+    clean = " ".join(value.replace(":", " ").split()).strip(" .,-")
+    lowered = clean.lower()
+    for key, normalized in ROLE_NORMALIZATIONS.items():
+        if key in lowered:
+            return normalized
+    return "Unknown" if not clean else clean[:100]
 
 
 def create_slug(value: str) -> str:
@@ -108,6 +256,7 @@ def parse_profile(url: str, html: str) -> ParsedPeopleAssemblyProfile:
     party_name, party_short_name = _extract_party(soup)
     photo_url = _extract_photo_url(soup)
     committees = _extract_current_committees(soup, url, party_name)
+    source_status = profile_source_status(html, url)
     return ParsedPeopleAssemblyProfile(
         full_name=full_name,
         display_name=display_name,
@@ -117,7 +266,40 @@ def parse_profile(url: str, html: str) -> ParsedPeopleAssemblyProfile:
         profile_url=url,
         photo_url=photo_url,
         committees=committees,
+        source_status=source_status,
+        is_active=source_status == "CURRENT",
     )
+
+
+def parse_committee_page(url: str, html: str) -> ParsedCommitteePage:
+    soup = BeautifulSoup(html, "html.parser")
+    heading = soup.select_one("h1") or soup.select_one(".committee-name") or soup.find("title")
+    raw_name = heading.get_text(" ", strip=True).split("::")[0] if heading else Path(urlparse(url).path.rstrip("/")).name
+    name = normalize_committee_name(raw_name)
+    members: list[ParsedCommitteeMembership] = []
+    seen: set[tuple[str, str]] = set()
+    for link in soup.find_all("a", href=True):
+        href = str(link["href"]).strip()
+        absolute = normalize_people_assembly_url(urljoin(url, href))
+        if not re.fullmatch(r"/person/[a-z0-9-]+/", urlparse(absolute).path):
+            continue
+        member_name = normalize_name(_strip_honorific(link.get_text(" ", strip=True)))
+        if not member_name or member_name.lower() in {"profile", "person"}:
+            continue
+        role = normalize_role(_nearby_role(link))
+        key = (member_name.lower(), role)
+        if key in seen:
+            continue
+        seen.add(key)
+        members.append(
+            ParsedCommitteeMembership(
+                name=member_name,
+                slug=create_slug(member_name),
+                role=role,
+                source_url=url,
+            )
+        )
+    return ParsedCommitteePage(name=name, slug=create_slug(name), source_url=url, members=members)
 
 
 def _extract_full_name(soup: BeautifulSoup) -> str:
@@ -148,16 +330,12 @@ def _extract_party(soup: BeautifulSoup) -> tuple[str, str]:
         block = title.find_parent(class_="mp-block")
         link = block.find("a") if block else None
         if link:
-            return _split_party(link.get_text(" ", strip=True))
+            return normalize_party_name(link.get_text(" ", strip=True))
     raise ValueError("Could not extract political party.")
 
 
 def _split_party(value: str) -> tuple[str, str]:
-    value = " ".join(value.split())
-    match = re.match(r"(.+?)\s*\(([^)]+)\)\s*$", value)
-    if match:
-        return match.group(1).strip(), match.group(2).strip()
-    return value, create_slug(value).upper()[:20]
+    return normalize_party_name(value)
 
 
 def _extract_photo_url(soup: BeautifulSoup) -> str | None:
@@ -181,7 +359,7 @@ def _extract_current_committees(soup: BeautifulSoup, profile_url: str, party_nam
         name = normalize_committee_name(link.get_text(" ", strip=True))
         if _is_party_or_constituency(name, party_name):
             continue
-        role = _extract_role(text_node, name)
+        role = normalize_role(_extract_role(text_node, name))
         date_text = item.select_one(".text-link__date")
         committees.append(
             ParsedCommitteeMembership(
@@ -195,15 +373,21 @@ def _extract_current_committees(soup: BeautifulSoup, profile_url: str, party_nam
     return committees
 
 
-def profile_is_current_mp(html: str) -> bool:
+def profile_source_status(html: str, url: str | None = None) -> str:
     text = extract_text(html).lower()
     current_signals = ["current positions:", "member of the national assembly", "member of parliament"]
-    former_signals = ["former positions:", "former member", "resigned"]
+    former_signals = ["former positions:", "former member", "resigned", "deceased", "not a current", "archived"]
     if any(signal in text for signal in current_signals):
-        return True
+        return "CURRENT"
     if any(signal in text for signal in former_signals):
-        return False
-    return True
+        return "FORMER"
+    if url and "/position/member/parliament/" in url:
+        return "CURRENT"
+    return "UNKNOWN"
+
+
+def profile_is_current_mp(html: str) -> bool:
+    return profile_source_status(html) == "CURRENT"
 
 
 def _extract_role(text_node, linked_name: str) -> str | None:
@@ -211,6 +395,16 @@ def _extract_role(text_node, linked_name: str) -> str | None:
     role = text.split(" at ", 1)[0].strip()
     role = role.replace(linked_name, "").strip()
     return role or None
+
+
+def _nearby_role(link) -> str | None:
+    container = link.find_parent(["li", "tr", "div", "p"]) or link.parent
+    if not container:
+        return None
+    text = container.get_text(" ", strip=True)
+    text = text.replace(link.get_text(" ", strip=True), " ")
+    role_match = re.search(r"\b(chairperson|chair|alternate member|alternate|whip|minister|deputy minister|member)\b", text, flags=re.IGNORECASE)
+    return role_match.group(1) if role_match else None
 
 
 def _is_party_or_constituency(name: str, party_name: str) -> bool:

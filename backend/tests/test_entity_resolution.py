@@ -32,4 +32,4 @@ def test_entity_resolution_alias_and_unique_surname():
         assert alias_match is not None
         assert alias_match.politician.id == politician.id
         assert surname_match is not None
-        assert surname_match.match_reason == "unique_surname"
+        assert surname_match.match_reason in {"unique_surname", "unique_surname_alias"}

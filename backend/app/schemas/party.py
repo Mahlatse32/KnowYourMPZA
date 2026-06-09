@@ -10,6 +10,8 @@ class PartyRead(BaseModel):
     short_name: str
     logo_url: str | None = None
     website_url: str | None = None
+    source_url: str | None = None
+    source_last_seen_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 

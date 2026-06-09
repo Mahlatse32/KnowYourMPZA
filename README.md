@@ -14,11 +14,15 @@ It is not a chatbot. The MVP intentionally excludes AI, OpenSearch, pgvector, fr
 - Parliamentary questions ingestion for source-backed MP questions and answers.
 - PDF extraction for parliamentary question papers/replies and archive pages that link to PDFs.
 - Bulk People's Assembly URL discovery for current MP profiles.
+- Full MP coverage workflow using People’s Assembly discovery plus curated URL lists.
+- Committee page discovery and committee membership ingestion.
 - Bulk PMG URL discovery from PMG search pages.
 - Raw HTML archiving under `backend/data/raw/`.
 - Politician aliases, surname-safe fallback matching, and entity resolution.
 - Ingestion run/error logging for API and CLI batches.
 - Quality summary endpoint and CLI report.
+- Quality issues endpoint for structured cleanup queues.
+- Dataset report script for milestone tracking.
 - Browse endpoints for parties, committees, and documents.
 - Browse endpoints for parliamentary questions.
 - Discovery scripts for parliamentary question listings and PDF sources.
@@ -50,6 +54,7 @@ backend/
   alembic/          migrations
   data/
     people_assembly_urls.txt
+    committee_urls.txt
     pmg_urls.txt
     parliamentary_question_urls.txt
     raw/
@@ -187,8 +192,18 @@ To grow from the seeded MVP to a larger real dataset, use the bulk scripts. They
 People's Assembly:
 
 ```bash
-docker compose exec backend python scripts/ingest_all_people_assembly.py --limit 50
-docker compose exec backend python scripts/ingest_all_people_assembly.py --dry-run --limit 50
+docker compose exec backend python scripts/ingest_all_people_assembly.py --limit 100
+docker compose exec backend python scripts/ingest_all_people_assembly.py --discover-only
+docker compose exec backend python scripts/ingest_all_people_assembly.py --write-discovered
+```
+
+Committee coverage:
+
+```bash
+docker compose exec backend python scripts/ingest_all_committees.py --limit 100
+docker compose exec backend python scripts/ingest_all_committees.py --discover-only
+docker compose exec backend python scripts/ingest_all_committees.py --write-discovered
+docker compose exec backend python scripts/regenerate_aliases.py
 ```
 
 PMG:
@@ -205,7 +220,20 @@ Useful flags:
 --limit 50
 --dry-run
 --sleep 0.5
+--discover-only
+--write-discovered
 ```
+
+`--write-discovered` appends newly discovered canonical URLs to the relevant local URL list without duplicating existing lines:
+
+```text
+backend/data/people_assembly_urls.txt
+backend/data/committee_urls.txt
+```
+
+People’s Assembly profile ingestion now stores `source_status`, `source_last_seen_at`, `profile_url`, `photo_url`, normalized party details, profile source evidence, and generated aliases. Re-ingestion updates matching politicians by profile URL or slug rather than creating duplicates.
+
+Committee ingestion normalizes committee names and roles, resolves member names through the existing entity-resolution service, updates existing memberships, and stores unresolved committee member names in `unresolved_entities` when no safe match is found.
 
 Raw HTML archives are written to:
 
@@ -224,16 +252,37 @@ API:
 
 ```bash
 curl http://localhost:8000/quality/summary
+curl http://localhost:8000/quality/issues
 ```
 
 CLI:
 
 ```bash
 python backend/scripts/quality_check.py
+python backend/scripts/dataset_report.py
 ```
 
 The report includes totals for politicians, parties, committees, memberships, documents, mentions, and records missing important links.
-It also reports active/inactive politician counts, alias count, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity counts, ingestion runs/errors, missing archive paths, and duplicate slug/source URL checks.
+It also reports active/inactive/unknown politician counts, alias count, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity status counts, ingestion runs/errors, missing archive paths, committees without memberships, and duplicate slug/party/membership/source URL checks.
+
+`/quality/issues` returns structured cleanup lists for politicians without parties, active politicians without committees, committees without memberships, documents without mentions, open unresolved entities, and duplicate candidates.
+
+`backend/scripts/dataset_report.py` writes `backend/reports/dataset_report.json`. Generated reports are ignored by Git unless intentionally tracked.
+
+## Unresolved Entity Review
+
+Unknown people from committee pages, MP pages, documents, and parliamentary questions are stored in `unresolved_entities` instead of being silently discarded.
+
+```bash
+curl "http://localhost:8000/unresolved-entities?status=OPEN"
+curl http://localhost:8000/unresolved-entities/{entity_id}
+curl -X POST http://localhost:8000/unresolved-entities/{entity_id}/resolve \
+  -H "Content-Type: application/json" \
+  -d '{"politician_id":"POLITICIAN_UUID","create_alias":true,"alias_type":"SOURCE_VARIANT","notes":"Resolved from committee page"}'
+curl -X POST http://localhost:8000/unresolved-entities/{entity_id}/ignore \
+  -H "Content-Type: application/json" \
+  -d '{"notes":"Not an MP"}'
+```
 
 ## Tests
 
@@ -271,6 +320,8 @@ curl http://localhost:8000/questions/{question_id}
 curl "http://localhost:8000/politicians/{politician_id}/questions?limit=50&offset=0"
 curl "http://localhost:8000/ingestion/runs?limit=20&offset=0"
 curl http://localhost:8000/quality/summary
+curl http://localhost:8000/quality/issues
+curl "http://localhost:8000/unresolved-entities?status=OPEN"
 ```
 
 ## Troubleshooting
@@ -288,6 +339,7 @@ curl http://localhost:8000/quality/summary
 - Broader official Parliament source ingestion.
 - richer parliamentary question parsing for scanned PDFs, reply/question matching, and source-specific layouts.
 - richer committee history and roles.
+- current-only committee filtering once the source exposes clearer status markers.
 - document source classification.
 - confidence/audit UI.
 - voting records later.
