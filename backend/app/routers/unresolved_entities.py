@@ -17,6 +17,9 @@ router = APIRouter(prefix="/unresolved-entities", tags=["unresolved entities"])
 @router.get("", response_model=list[UnresolvedEntityRead])
 def list_unresolved_entities(
     status: str | None = Query(default=None),
+    source_type: str | None = Query(default=None, description="Filter by entity_type (e.g. POLITICIAN)"),
+    entity_type: str | None = Query(default=None, description="Alias for source_type"),
+    name: str | None = Query(default=None, description="Case-insensitive substring match on raw_value"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -24,6 +27,11 @@ def list_unresolved_entities(
     stmt = select(UnresolvedEntity).order_by(UnresolvedEntity.created_at.desc()).limit(limit).offset(offset)
     if status:
         stmt = stmt.where(UnresolvedEntity.status == status.upper())
+    effective_type = source_type or entity_type
+    if effective_type:
+        stmt = stmt.where(UnresolvedEntity.entity_type == effective_type.upper())
+    if name:
+        stmt = stmt.where(UnresolvedEntity.raw_value.ilike(f"%{name}%"))
     return list(db.scalars(stmt))
 
 

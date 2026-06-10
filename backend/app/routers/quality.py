@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services.coverage_service import generate_full_coverage_report
 from app.services.quality_service import archive_gaps, quality_duplicates, quality_issues, quality_summary
 
 router = APIRouter(prefix="/quality", tags=["quality"])
@@ -25,3 +26,8 @@ def duplicates(limit: int = Query(default=100, ge=1, le=500), db: Session = Depe
 @router.get("/archive-gaps")
 def archives(limit: int = Query(default=100, ge=1, le=500), db: Session = Depends(get_db)) -> dict[str, list[dict]]:
     return archive_gaps(db, limit=limit)
+
+
+@router.get("/full-coverage")
+def full_coverage(db: Session = Depends(get_db)) -> dict:
+    return generate_full_coverage_report(db)
