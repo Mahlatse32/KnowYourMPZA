@@ -322,45 +322,159 @@ docker compose exec backend pytest
 
 ## Scheduled Ingestion
 
-GitHub Actions includes CI and a guarded scheduled ingestion workflow. Scheduled ingestion exits unless these variables are explicitly configured:
+GitHub Actions includes CI and a guarded scheduled ingestion workflow
+(`.github/workflows/scheduled-ingestion.yml`).
 
-```text
-DATABASE_URL
-INGESTION_ENABLED=true
-SOURCE_RATE_LIMIT_SLEEP
-MAX_DAILY_INGESTION_URLS
-MAX_WEEKLY_INGESTION_URLS
-```
+**The scheduled workflow will not run unless `INGESTION_ENABLED=true` is
+explicitly set as a GitHub Actions secret.** This prevents accidental ingestion
+against the wrong database.
 
-Daily ingestion runs PMG discovery/ingestion, parliamentary question ingestion, quality checks, and dataset report generation.
-Weekly ingestion refreshes People’s Assembly MPs, committees, aliases, and the dataset report.
+### Required GitHub secrets
+
+| Secret | Description |
+|---|---|
+| `DATABASE_URL` | Production PostgreSQL connection string |
+| `INGESTION_ENABLED` | Must be `true` to allow ingestion to proceed |
+
+### Optional GitHub variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `SOURCE_RATE_LIMIT_SLEEP` | `0.5` | Seconds between source requests |
+| `MAX_DAILY_INGESTION_URLS` | `50` | URL limit per daily run |
+| `MAX_WEEKLY_INGESTION_URLS` | `100` | URL limit per weekly run |
+
+### Schedule
+
+| Job | Cron | Purpose |
+|---|---|---|
+| `daily` | 03:15 UTC every day | PMG discovery + ingestion, parliamentary question ingestion, quality check, dataset report |
+| `weekly` | 04:45 UTC every Sunday | People’s Assembly MP refresh, committee refresh, alias regeneration, dataset report |
+
+### How to enable safely
+
+1. Deploy the backend to production with a real `DATABASE_URL`.
+2. Add `DATABASE_URL` and `INGESTION_ENABLED=true` as GitHub Actions secrets.
+3. Optionally set rate limit variables.
+4. The next scheduled run will proceed. Use `workflow_dispatch` to trigger manually.
+5. Inspect results at `GET /ingestion/runs`.
+
+### How to disable
+
+Remove the `INGESTION_ENABLED` secret or set it to anything other than `true`.
+The workflow will exit cleanly without touching the database.
 
 ## Production Deployment
 
-The backend Dockerfile runs `alembic upgrade head` before starting Uvicorn and respects an external `DATABASE_URL`, so it can run on Render, Railway, Fly.io, or similar Docker hosts with managed PostgreSQL.
+### Backend deployment
 
-Minimum production environment:
+The backend Dockerfile runs `alembic upgrade head` before starting Uvicorn and
+respects an external `DATABASE_URL`, so it can run on Render, Railway, Fly.io,
+or any Docker host with a managed PostgreSQL instance.
+
+**Recommended: Render Web Service (Docker)**
+
+| Setting | Value |
+|---|---|
+| Environment | Docker |
+| Docker context | `.` (repo root) |
+| Dockerfile path | `backend/Dockerfile` |
+| Health check path | `/health` |
+| Port | `8000` |
+
+Set the following environment variables in the Render dashboard:
 
 ```text
-DATABASE_URL=postgresql+psycopg://...
+DATABASE_URL=postgresql+psycopg://<user>:<pass>@<host>/<db>
 ENVIRONMENT=production
 CORS_ORIGIN=https://your-frontend.example
+INGESTION_ENABLED=false
 ```
 
-Health checks:
+The start command is baked into the Dockerfile:
+
+```bash
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+**Alternative: Render/Railway/Fly.io Python service (no Docker)**
+
+Build command:
+
+```bash
+pip install -r backend/requirements.txt
+```
+
+Start command (run from `backend/`):
+
+```bash
+alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+### Frontend deployment
+
+**Recommended: Vercel or Netlify**
+
+| Setting | Value |
+|---|---|
+| Root directory | `frontend` |
+| Build command | `npm run build` |
+| Output directory | `dist` |
+| Node version | 22 |
+
+Set the environment variable:
+
+```text
+VITE_API_BASE_URL=https://your-backend-url.example
+```
+
+Copy `frontend/.env.example` to `frontend/.env.local` for local development:
+
+```bash
+cp frontend/.env.example frontend/.env.local
+# Edit VITE_API_BASE_URL if your backend is not on http://localhost:8000
+```
+
+### Production database
+
+Use a managed PostgreSQL 16 service (Neon, Supabase, Render Postgres, Railway Postgres).
+
+1. Create a database and note the connection string.
+2. Set `DATABASE_URL=postgresql+psycopg://<user>:<pass>@<host>/<db>` on the backend service.
+3. Migrations run automatically on backend start via `alembic upgrade head`.
+4. Verify the schema applied:
+
+```bash
+curl https://your-api.example/health/ready
+```
+
+### Backup and restore
+
+```bash
+# Backup
+pg_dump "$DATABASE_URL" > backups/knowyourmpza.sql
+
+# Restore
+psql "$DATABASE_URL" < backups/knowyourmpza.sql
+
+# Archive raw HTML/PDFs
+tar -czf backups/raw-archives.tgz backend/data/raw
+```
+
+Raw archives in `backend/data/raw/` are not automatically backed up unless you
+configure an S3-compatible storage backend (see `ARCHIVE_STORAGE_MODE` in
+`backend/.env.example`).
+
+### Health checks
 
 ```bash
 curl https://your-api.example/health
 curl https://your-api.example/health/ready
 ```
 
-Backup examples:
-
-```bash
-pg_dump "$DATABASE_URL" > backups/knowyourmpza.sql
-psql "$DATABASE_URL" < backups/knowyourmpza.sql
-tar -czf backups/raw-archives.tgz backend/data/raw
-```
+`/health` returns `200 {"status": "ok"}` immediately.
+`/health/ready` returns `200 {"status": "ready"}` once the database is reachable,
+or `503` if the database is not available.
 
 ## API Examples
 
