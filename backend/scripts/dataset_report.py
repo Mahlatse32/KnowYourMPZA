@@ -28,6 +28,12 @@ def main() -> None:
             "membership_counts": _pick(summary, "total_committee_memberships", "duplicate_membership_candidates"),
             "alias_counts": _pick(summary, "total_aliases"),
             "document_counts": _pick(summary, "total_documents", "documents_without_mentions", "documents_without_archive_path"),
+            "pmg_counts": _pick(
+                summary,
+                "total_pmg_documents",
+                "pmg_documents_without_mentions",
+                "pmg_documents_without_archive_path",
+            ),
             "mention_counts": {
                 "total_document_mentions": summary["total_document_mentions"],
                 "total_question_mentions": summary["total_question_mentions"],

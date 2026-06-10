@@ -31,6 +31,20 @@ def quality_summary(db: Session) -> dict[str, int]:
         "total_committee_memberships": _count(db, CommitteeMembership),
         "total_documents": _count(db, Document),
         "total_document_mentions": _count(db, DocumentMention),
+        "total_pmg_documents": db.scalar(
+            select(func.count()).select_from(Document).where(Document.document_type.like("PMG%"))
+        )
+        or 0,
+        "pmg_documents_without_mentions": db.scalar(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.document_type.like("PMG%"), Document.id.not_in(select(DocumentMention.document_id).distinct()))
+        )
+        or 0,
+        "pmg_documents_without_archive_path": db.scalar(
+            select(func.count()).select_from(Document).where(Document.document_type.like("PMG%"), Document.archive_path.is_(None))
+        )
+        or 0,
         "total_parliamentary_questions": _count(db, ParliamentaryQuestion),
         "total_question_mentions": _count(db, QuestionMention),
         "total_aliases": _count(db, PoliticianAlias),
@@ -77,6 +91,36 @@ def quality_summary(db: Session) -> dict[str, int]:
         "duplicate_party_short_name_count": _duplicate_count(db, Party.short_name),
         "duplicate_membership_candidates": _duplicate_membership_candidates(db),
         "duplicate_source_url_count": _duplicate_count(db, Document.source_url),
+    }
+
+
+def quality_duplicates(db: Session, limit: int = 100) -> dict[str, list[dict]]:
+    return {
+        "politician_slugs": _duplicate_values(db, Politician.slug, limit),
+        "committee_slugs": _duplicate_values(db, Committee.slug, limit),
+        "party_short_names": _duplicate_values(db, Party.short_name, limit),
+        "document_source_urls": _duplicate_values(db, Document.source_url, limit),
+        "membership_candidates": [],
+    }
+
+
+def archive_gaps(db: Session, limit: int = 100) -> dict[str, list[dict]]:
+    return {
+        "documents_without_archive_path": [
+            {"id": str(item.id), "title": item.title, "source_url": item.source_url, "document_type": item.document_type}
+            for item in db.scalars(
+                select(Document).where(Document.archive_path.is_(None)).order_by(Document.created_at.desc()).limit(limit)
+            )
+        ],
+        "parliamentary_questions_without_archive_path": [
+            {"id": str(item.id), "title": item.title, "source_url": item.source_url}
+            for item in db.scalars(
+                select(ParliamentaryQuestion)
+                .where(ParliamentaryQuestion.archive_path.is_(None))
+                .order_by(ParliamentaryQuestion.created_at.desc())
+                .limit(limit)
+            )
+        ],
     }
 
 

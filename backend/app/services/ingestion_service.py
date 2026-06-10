@@ -247,12 +247,14 @@ def _upsert_mention(db: Session, document: Document, politician: Politician, pay
             snippet=payload["snippet"],
             source_url=payload["source_url"],
             confidence_score=payload["confidence_score"],
+            match_reason=payload.get("match_reason"),
         )
         db.add(mention)
     else:
         mention.snippet = payload["snippet"]
         mention.source_url = payload["source_url"]
         mention.confidence_score = payload["confidence_score"]
+        mention.match_reason = payload.get("match_reason")
     return mention
 
 
@@ -531,6 +533,7 @@ def ingest_pmg_documents(db: Session, urls: list[str]) -> dict:
                         "snippet": snippet,
                         "source_url": parsed.source_url,
                         "confidence_score": confidence,
+                        "match_reason": reason,
                     },
                 )
                 _bump(summary, existing_mention is None)

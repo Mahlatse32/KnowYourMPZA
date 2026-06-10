@@ -3,6 +3,7 @@ from fastapi.testclient import TestClient
 from app.db import SessionLocal
 from app.ingestion.parliament_question_discovery import urls_from_listing
 from app.ingestion.pdf_utils import archive_pdf, extract_pdf_text, is_pdf_url
+from app.ingestion.pmg import discover_pmg_document_urls, parse_document
 from app.ingestion.people_assembly import (
     create_slug,
     discover_people_assembly_urls_from_listing,
@@ -216,6 +217,25 @@ def test_quality_issues_endpoint():
     body = response.json()
     assert "active_politicians_without_committees" in body
     assert "unresolved_entities_open" in body
+    assert client.get("/quality/duplicates").status_code == 200
+    assert client.get("/quality/archive-gaps").status_code == 200
+
+
+def test_pmg_discovery_and_metadata_parsing(monkeypatch):
+    html = """
+    <html><body>
+      <a href="/committee-meeting/43172/">Meeting</a>
+      <a href="/committee-report/100/">Report</a>
+      <h1>Portfolio Committee on Health meeting</h1>
+      <p>12 March 2026</p>
+    </body></html>
+    """
+    monkeypatch.setattr("app.ingestion.pmg.fetch_page", lambda _: html)
+    urls = discover_pmg_document_urls(limit=5, year=2026, committee="Health")
+    assert "https://pmg.org.za/committee-meeting/43172/" in urls
+    parsed = parse_document("https://pmg.org.za/committee-meeting/43172/", html, "data/raw/pmg/test.html")
+    assert parsed.document_type == "PMG_COMMITTEE_MEETING"
+    assert parsed.committee_name == "Portfolio Committee on Health"
 
 
 def test_parliamentary_question_ingestion_and_browse(monkeypatch):

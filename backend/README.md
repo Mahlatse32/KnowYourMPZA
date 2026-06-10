@@ -1,7 +1,8 @@
 # KnowYourMPZA Backend
 
 FastAPI backend for verified South African MP data. It ingests People's Assembly profiles and PMG documents, archives fetched HTML, resolves MP aliases, and exposes quality/API endpoints.
-It also ingests parliamentary questions as source-backed backend data, including direct PDF URLs and archive pages that link to PDFs, without adding AI, chatbot, frontend, auth, or search infrastructure.
+It also ingests parliamentary questions as source-backed backend data, including direct PDF URLs and archive pages that link to PDFs, without adding AI, chatbot, auth, or search infrastructure.
+V1 pairs this backend with a small public frontend in `../frontend`.
 
 ## Run
 
@@ -65,6 +66,8 @@ python scripts/ingest_all_committees.py --discover-only
 python scripts/ingest_all_committees.py --write-discovered
 python scripts/regenerate_aliases.py
 python scripts/ingest_all_pmg.py --limit 50
+python scripts/ingest_all_pmg.py --discover-only --year 2026 --committee Health
+python scripts/ingest_all_pmg.py --write-discovered
 ```
 
 Useful flags:
@@ -77,6 +80,8 @@ Useful flags:
 --sleep 0.5
 --discover-only
 --write-discovered
+--year 2026
+--committee Health
 ```
 
 The bulk scripts merge URLs from local text files with discovered URLs, archive raw HTML, continue after failed URLs, and record ingestion runs/errors. `--write-discovered` updates `data/people_assembly_urls.txt` or `data/committee_urls.txt` with canonical discovered URLs without duplicates.
@@ -112,6 +117,8 @@ python scripts/quality_check.py
 python scripts/dataset_report.py
 curl http://localhost:8000/quality/summary
 curl http://localhost:8000/quality/issues
+curl http://localhost:8000/quality/duplicates
+curl http://localhost:8000/quality/archive-gaps
 ```
 
 The quality summary includes totals, alias coverage, parliamentary question counts, PDF question source counts, parse failures/partials, unresolved entity status counts, active/inactive/unknown politician status, ingestion run/error counts, archive-path coverage, committees without memberships, and duplicate slug/party/membership/source URL checks.
@@ -134,10 +141,66 @@ curl -X POST http://localhost:8000/unresolved-entities/{entity_id}/ignore \
 Known limitation: parliamentary question PDF parsing is text extraction first. Scanned PDFs, detailed question/reply matching, and source-specific layouts still need deeper handling.
 Committee discovery currently uses People’s Assembly committee/organisation pages and may include historical committees; quality reports show remaining cleanup gaps.
 
+## Scheduled Ingestion
+
+Scheduled scripts are safe by default and exit unless explicitly enabled:
+
+```bash
+python scripts/run_daily_ingestion.py
+python scripts/run_weekly_ingestion.py
+```
+
+Required environment:
+
+```text
+DATABASE_URL
+INGESTION_ENABLED=true
+SOURCE_RATE_LIMIT_SLEEP
+MAX_DAILY_INGESTION_URLS
+MAX_WEEKLY_INGESTION_URLS
+```
+
+Daily ingestion refreshes PMG documents and parliamentary questions, then writes quality/dataset reports.
+Weekly ingestion refreshes People’s Assembly MPs, committees, aliases, and the dataset report.
+
+## Production Deployment
+
+The Dockerfile is production friendly for a Docker host with managed PostgreSQL:
+
+```bash
+alembic upgrade head
+uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+Set:
+
+```text
+DATABASE_URL=postgresql+psycopg://...
+ENVIRONMENT=production
+CORS_ORIGIN=https://your-frontend.example
+```
+
+Health endpoints:
+
+```bash
+curl /health
+curl /health/ready
+```
+
+Archive storage defaults to local filesystem via `app.services.archive_storage`. S3-compatible storage is stubbed/documented for a later phase.
+
+Backup examples:
+
+```bash
+pg_dump "$DATABASE_URL" > backups/knowyourmpza.sql
+psql "$DATABASE_URL" < backups/knowyourmpza.sql
+tar -czf backups/raw-archives.tgz data/raw
+```
+
 ## Tests
 
 ```bash
 pytest
 ```
 
-No chatbot, AI, OpenSearch, pgvector, frontend, auth, payments, or voting records are included in this MVP.
+No chatbot, AI, OpenSearch, pgvector, auth, payments, bills, or voting records are included in V1.
