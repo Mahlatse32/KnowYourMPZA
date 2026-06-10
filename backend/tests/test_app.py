@@ -391,3 +391,131 @@ def test_parliamentary_question_discovery_extracts_pdf_links():
     urls = urls_from_listing("https://www.parliament.gov.za/questions-and-replies", html, year=2026)
     assert "https://www.parliament.gov.za/storage/app/media/Docs/exe_rq_na/RNW123-2026.pdf" in urls
     assert "https://archive.parliament.gov.za/handle/123456789/5997" in urls
+
+
+# ---------------------------------------------------------------------------
+# /quality/full-coverage endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_full_coverage_endpoint_returns_expected_keys():
+    response = client.get("/quality/full-coverage")
+    assert response.status_code == 200
+    data = response.json()
+    assert "generated_at" in data
+    assert "database_counts" in data
+    assert "source_coverage" in data
+    assert "politician_coverage" in data
+    assert "committee_coverage" in data
+    assert "pmg_coverage" in data
+    assert "question_coverage" in data
+    assert "pdf_coverage" in data
+    assert "archive_coverage" in data
+    assert "unresolved_entity_coverage" in data
+    assert "duplicate_candidates" in data
+    assert "weak_records" in data
+    assert "latest_ingestion_runs" in data
+    assert "latest_ingestion_errors" in data
+    assert "recommendations" in data
+
+
+def test_full_coverage_recommendations_is_nonempty_list():
+    response = client.get("/quality/full-coverage")
+    assert response.status_code == 200
+    recs = response.json()["recommendations"]
+    assert isinstance(recs, list)
+    assert len(recs) >= 1
+
+
+def test_full_coverage_pct_fields_are_none_or_float():
+    response = client.get("/quality/full-coverage")
+    assert response.status_code == 200
+    pc = response.json()["politician_coverage"]
+    for key in ("with_party_pct", "with_source_url_pct", "with_aliases_pct", "with_committees_pct"):
+        val = pc[key]
+        assert val is None or isinstance(val, (int, float))
+
+
+# ---------------------------------------------------------------------------
+# Idempotent upserts — re-ingesting same profiles does not duplicate rows
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_people_assembly_is_idempotent(monkeypatch):
+    html = """
+    <html><body>
+      <h1 class="profile-name">Idempotent Test MP</h1>
+      <p class="party-name"><a href="/party/test-party/">Test Party</a></p>
+      <p class="province">Gauteng</p>
+    </body></html>
+    """
+    url = "https://www.pa.org.za/person/idempotent-test-mp/"
+    monkeypatch.setattr("app.ingestion.people_assembly.fetch_url", lambda u, sleep=0.5: html)
+
+    response1 = client.post("/ingest/people-assembly", json={"urls": [url]})
+    assert response1.status_code == 200
+
+    response2 = client.post("/ingest/people-assembly", json={"urls": [url]})
+    assert response2.status_code == 200
+
+    politicians = client.get("/politicians?limit=500").json()
+    count = sum(1 for p in politicians if p["display_name"] == "Idempotent Test MP")
+    assert count == 1, f"Expected 1 record, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# Alias-based search — politicians should be findable by alias
+# ---------------------------------------------------------------------------
+
+
+def test_politician_search_finds_by_alias(monkeypatch):
+    html = """
+    <html><body>
+      <h1 class="profile-name">Alias Search Test</h1>
+      <p class="party-name"><a href="/party/demo-party/">Demo Party</a></p>
+      <p class="province">Western Cape</p>
+    </body></html>
+    """
+    url = "https://www.pa.org.za/person/alias-search-test/"
+    monkeypatch.setattr("app.ingestion.people_assembly.fetch_url", lambda u, sleep=0.5: html)
+
+    client.post("/ingest/people-assembly", json={"urls": [url]})
+
+    with SessionLocal() as db:
+        politician = next(
+            (p for p in db.execute(select(__import__("app.models.politician", fromlist=["Politician"]).Politician)).scalars() if p.display_name == "Alias Search Test"),
+            None,
+        )
+        assert politician is not None
+        aliases = list(db.scalars(select(PoliticianAlias).where(PoliticianAlias.politician_id == politician.id)))
+        alias_values = {a.alias for a in aliases}
+        assert len(alias_values) > 0, "Expected at least one alias to be generated"
+
+
+# ---------------------------------------------------------------------------
+# Unresolved entity filters
+# ---------------------------------------------------------------------------
+
+
+def test_unresolved_entities_filter_by_name():
+    with SessionLocal() as db:
+        from app.models.unresolved_entity import UnresolvedEntity as UE
+        db.add(UE(raw_value="Filtertest Unique Name", entity_type="POLITICIAN", source_name="test", status="OPEN"))
+        db.commit()
+
+    response = client.get("/unresolved-entities?name=Filtertest")
+    assert response.status_code == 200
+    results = response.json()
+    assert any("Filtertest" in r["raw_value"] for r in results)
+
+
+def test_unresolved_entities_filter_by_entity_type():
+    with SessionLocal() as db:
+        from app.models.unresolved_entity import UnresolvedEntity as UE
+        db.add(UE(raw_value="Type Filter Entity", entity_type="COMMITTEE", source_name="test", status="OPEN"))
+        db.commit()
+
+    response = client.get("/unresolved-entities?entity_type=COMMITTEE")
+    assert response.status_code == 200
+    results = response.json()
+    assert all(r["entity_type"] == "COMMITTEE" for r in results)
