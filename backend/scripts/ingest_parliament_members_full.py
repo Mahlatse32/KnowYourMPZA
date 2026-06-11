@@ -73,8 +73,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Official Parliament member ingestion via PA cross-reference.")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Perform live discovery during --dry-run (off by default so dry runs are fast).",
+    )
     parser.add_argument("--sleep", type=float, default=0.5)
     args = parser.parse_args()
+
+    if args.dry_run and not args.discover:
+        print("dry-run: skipping live Parliament discovery (pass --discover to enable).")
+        return
 
     print("discovering members from official Parliament listing pages...")
     pa_urls = discover_parliament_member_pa_urls(PARLIAMENT_MEMBER_LISTING_URLS, sleep=args.sleep)

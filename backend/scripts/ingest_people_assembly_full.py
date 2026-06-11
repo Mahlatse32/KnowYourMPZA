@@ -43,6 +43,11 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Print discovered URLs without ingesting.")
     parser.add_argument("--sleep", type=float, default=0.5, help="Seconds between requests.")
     parser.add_argument("--discover-only", action="store_true", help="Print discovered URLs and exit.")
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Perform live URL discovery during --dry-run (off by default so dry runs are fast).",
+    )
     parser.add_argument("--write-discovered", action="store_true", help="Append discovered URLs to file.")
     parser.add_argument(
         "--include-former",
@@ -55,8 +60,12 @@ def main() -> None:
 
     path = Path(args.file)
     existing_urls = _read_urls(path)
-    print("discovering urls from People's Assembly listings...")
-    discovered_urls = discover_people_assembly_mp_urls(listing_urls=listing_urls)
+    if should_discover(dry_run=args.dry_run, discover=args.discover, discover_only=args.discover_only):
+        print("discovering urls from People's Assembly listings...")
+        discovered_urls = discover_people_assembly_mp_urls(listing_urls=listing_urls)
+    else:
+        print("dry-run: skipping live discovery (pass --discover to enable).")
+        discovered_urls = []
 
     if args.write_discovered:
         _write_merged_urls(path, existing_urls, discovered_urls)
@@ -84,6 +93,17 @@ def main() -> None:
             time.sleep(args.sleep)
         finish_ingestion_run(db, run, total)
     _print(total, len(urls))
+
+
+def should_discover(*, dry_run: bool, discover: bool, discover_only: bool) -> bool:
+    """Live network discovery runs on real ingestion or when explicitly requested.
+
+    Plain --dry-run must stay fast and offline; --discover (or --discover-only)
+    opts back in to live discovery.
+    """
+    if discover or discover_only:
+        return True
+    return not dry_run
 
 
 def _read_urls(path: Path) -> list[str]:
