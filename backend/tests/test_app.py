@@ -16,7 +16,7 @@ from app.models.committee_membership import CommitteeMembership
 from app.models.politician_alias import PoliticianAlias
 from app.models.unresolved_entity import UnresolvedEntity
 from app.services.ingestion_service import ingest_people_assembly_committees, ingest_people_assembly_profiles
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 
 client = TestClient(app)
@@ -519,3 +519,338 @@ def test_unresolved_entities_filter_by_entity_type():
     assert response.status_code == 200
     results = response.json()
     assert all(r["entity_type"] == "COMMITTEE" for r in results)
+
+
+# ---------------------------------------------------------------------------
+# Party ingestion / normalization / deduplication
+# ---------------------------------------------------------------------------
+
+
+def test_party_normalization_known_abbreviations():
+    """normalize_party_name handles abbreviations, trailing noise, and casing."""
+    cases = [
+        ("ANC", "African National Congress", "ANC"),
+        ("Democratic Alliance (DA)", "Democratic Alliance", "DA"),
+        ("  EFF  ", "Economic Freedom Fighters", "EFF"),
+        ("FF+", "Freedom Front Plus", "FF Plus"),
+        ("IFP", "Inkatha Freedom Party", "IFP"),
+        ("ActionSA", "ActionSA", "ActionSA"),
+    ]
+    for raw, expected_name, expected_short in cases:
+        name, short = normalize_party_name(raw)
+        assert name == expected_name, f"name mismatch for {raw!r}: got {name!r}"
+        assert short == expected_short, f"short mismatch for {raw!r}: got {short!r}"
+
+
+def test_party_upsert_does_not_duplicate(monkeypatch):
+    """Ingesting the same MP twice creates only one party record."""
+    html = """
+    <html><head>
+      <meta property="profile:first_name" content="Party">
+      <meta property="profile:last_name" content="Dedup Test">
+    </head><body>
+      <h1>Party Dedup Test</h1>
+      <div class="mp-block"><div class="mp-block__title">Political Party</div><a>African National Congress (ANC)</a></div>
+      Member of the National Assembly
+    </body></html>
+    """
+    url = "https://www.pa.org.za/person/party-dedup-test/"
+    monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
+    with SessionLocal() as db:
+        ingest_people_assembly_profiles(db, [url])
+        ingest_people_assembly_profiles(db, [url])
+    parties = client.get("/parties").json()
+    anc_count = sum(1 for p in parties if p["short_name"] == "ANC")
+    assert anc_count == 1, f"Expected exactly 1 ANC, got {anc_count}"
+
+
+# ---------------------------------------------------------------------------
+# Committee normalization and deduplication
+# ---------------------------------------------------------------------------
+
+
+def test_committee_normalization():
+    """Committee names are stripped of 'Portfolio Committee on' prefix and cleaned."""
+    cases = [
+        ("Portfolio Committee on Health", "Health"),
+        ("Standing Committee on Finance", "Finance"),
+        ("Portfolio Committee on  Basic Education,,", "Basic Education"),
+    ]
+    for raw, expected in cases:
+        assert normalize_committee_name(raw) == expected, f"mismatch for {raw!r}"
+
+
+def test_committee_upsert_does_not_duplicate(monkeypatch):
+    """Re-ingesting the same committee page creates exactly one committee."""
+    url = "https://www.pa.org.za/committee/dedup-committee-test/"
+    html = """
+    <html><body>
+      <h1>Portfolio Committee on Dedup Testing</h1>
+      <ul>
+        <li>Chairperson <a href="/person/julius-sello-malema/">Julius Malema</a></li>
+      </ul>
+    </body></html>
+    """
+    monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
+    client.post("/ingest/seed")
+    with SessionLocal() as db:
+        ingest_people_assembly_committees(db, [url])
+        ingest_people_assembly_committees(db, [url])
+    committees = client.get("/committees").json()
+    count = sum(1 for c in committees if "Dedup Testing" in c.get("name", ""))
+    assert count == 1, f"Expected 1 committee, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# Committee membership — role persistence and duplicate prevention
+# ---------------------------------------------------------------------------
+
+
+def test_committee_membership_role_is_persisted(monkeypatch):
+    """Membership records retain the role extracted from source HTML."""
+    client.post("/ingest/seed")
+    url = "https://www.pa.org.za/committee/role-test-committee/"
+    html = """
+    <html><body>
+      <h1>Portfolio Committee on Role Test</h1>
+      <ul>
+        <li>Chairperson <a href="/person/julius-sello-malema/">Julius Malema</a></li>
+      </ul>
+    </body></html>
+    """
+    monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
+    with SessionLocal() as db:
+        ingest_people_assembly_committees(db, [url])
+        membership = db.scalars(select(CommitteeMembership).where(CommitteeMembership.source_url == url)).first()
+    assert membership is not None
+    assert membership.role == "Chairperson"
+
+
+def test_committee_membership_no_duplicate_rows(monkeypatch):
+    """Ingesting the same committee page twice does not produce duplicate membership rows."""
+    client.post("/ingest/seed")
+    url = "https://www.pa.org.za/committee/nodedup-membership-committee/"
+    html = """
+    <html><body>
+      <h1>Portfolio Committee on No Dup Membership</h1>
+      <ul>
+        <li>Member <a href="/person/julius-sello-malema/">Julius Malema</a></li>
+      </ul>
+    </body></html>
+    """
+    monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
+    with SessionLocal() as db:
+        ingest_people_assembly_committees(db, [url])
+        ingest_people_assembly_committees(db, [url])
+        count = db.scalar(select(func.count()).select_from(CommitteeMembership).where(CommitteeMembership.source_url == url))
+    assert count == 1, f"Expected 1 membership, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# PMG ingestion — document type, committee linkage, idempotency
+# ---------------------------------------------------------------------------
+
+
+def test_pmg_document_type_is_set(monkeypatch):
+    """PMG meeting pages are stored with the correct document_type."""
+    html = """
+    <html><body>
+      <a href="/committee-meeting/99999/">Meeting 99999</a>
+      <h1>Portfolio Committee on Water meeting</h1>
+    </body></html>
+    """
+    monkeypatch.setattr("app.ingestion.pmg.fetch_page", lambda _: html)
+    parsed = parse_document("https://pmg.org.za/committee-meeting/99999/", html, "data/raw/pmg/99999.html")
+    assert parsed.document_type == "PMG_COMMITTEE_MEETING"
+
+
+def test_pmg_ingestion_is_idempotent(monkeypatch):
+    """Ingesting the same PMG URL twice creates one document record."""
+    url = "https://pmg.org.za/committee-meeting/idempotent-99/"
+    html = """
+    <html><body>
+      <h1>Portfolio Committee on Idempotency meeting</h1>
+      <p>5 June 2026</p>
+    </body></html>
+    """
+    monkeypatch.setattr("app.ingestion.pmg.fetch_page", lambda _: html)
+    response1 = client.post("/ingest/pmg-documents", json={"urls": [url]})
+    response2 = client.post("/ingest/pmg-documents", json={"urls": [url]})
+    assert response1.status_code == 200
+    assert response2.status_code == 200
+    docs = client.get("/documents").json()
+    count = sum(1 for d in docs if d.get("source_url") == url)
+    assert count == 1, f"Expected 1 PMG document, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# Entity resolution — alias match, surname match
+# ---------------------------------------------------------------------------
+
+
+def test_entity_resolution_finds_by_alias():
+    """Entity resolution can find a politician via a generated alias."""
+    from app.services.entity_resolution import resolve_politician_name
+
+    client.post("/ingest/seed")
+    results = client.get("/search?name=malema").json()
+    assert results, "Seed data must include Malema"
+    with SessionLocal() as db:
+        result = resolve_politician_name(db, "Julius Malema")
+        assert result is not None
+        assert result.confidence_score >= 0.9
+        assert "Malema" in result.politician.display_name
+
+
+def test_entity_resolution_returns_none_for_unknown():
+    """Entity resolution returns None for a name with no plausible match."""
+    from app.services.entity_resolution import resolve_politician_name
+
+    with SessionLocal() as db:
+        result = resolve_politician_name(db, "Zzz Totally Nonexistent Person XYZ999")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# Search completeness checks script — unit tests for individual check logic
+# ---------------------------------------------------------------------------
+
+
+def test_search_completeness_status_helper():
+    """_status returns PASS for positive counts and FAIL for zero."""
+    from scripts.check_search_completeness import _status
+
+    assert _status(1) == "PASS"
+    assert _status(10) == "PASS"
+    assert _status(0) == "FAIL"
+
+
+def test_search_completeness_check_dataclass():
+    """Check dataclass serialises cleanly via asdict."""
+    from dataclasses import asdict
+
+    from scripts.check_search_completeness import Check
+
+    c = Check("test_check", "Test description", "PASS", 5, "sample", "a note")
+    d = asdict(c)
+    assert d["status"] == "PASS"
+    assert d["result_count"] == 5
+
+
+def test_search_completeness_markdown_includes_summary():
+    """build_markdown outputs a summary line and check table."""
+    from scripts.check_search_completeness import Check, build_markdown
+
+    checks = [
+        Check("c1", "Check one", "PASS", 1, "val", ""),
+        Check("c2", "Check two", "FAIL", 0, None, "nothing found"),
+        Check("c3", "Check three", "SKIP", 0, None, "no data"),
+    ]
+    md = build_markdown(checks, "2026-06-11T00:00:00Z")
+    assert "PASS" in md
+    assert "FAIL" in md
+    assert "SKIP" in md
+    assert "1 PASS" in md
+    assert "1 FAIL" in md
+
+
+# ---------------------------------------------------------------------------
+# /quality/full-coverage — with seeded data
+# ---------------------------------------------------------------------------
+
+
+def test_full_coverage_with_seeded_data_has_nonzero_counts():
+    """After seeding, database_counts should have positive totals."""
+    client.post("/ingest/seed")
+    response = client.get("/quality/full-coverage")
+    assert response.status_code == 200
+    counts = response.json()["database_counts"]
+    assert counts["politicians_total"] >= 10
+    assert counts["parties_total"] >= 1
+    assert counts["committees_total"] >= 1
+
+
+def test_full_coverage_source_coverage_is_list():
+    """source_coverage must be a list of objects with required keys."""
+    response = client.get("/quality/full-coverage")
+    assert response.status_code == 200
+    sc = response.json()["source_coverage"]
+    assert isinstance(sc, list)
+    assert len(sc) > 0
+    for item in sc:
+        assert "category" in item
+        assert "ingested_total" in item
+        assert "coverage_note" in item
+
+
+def test_full_coverage_duplicate_candidates_are_ints():
+    """All duplicate_candidates values must be non-negative integers."""
+    response = client.get("/quality/full-coverage")
+    assert response.status_code == 200
+    dup = response.json()["duplicate_candidates"]
+    for key, val in dup.items():
+        assert isinstance(val, int), f"{key} is not int: {val!r}"
+        assert val >= 0
+
+
+# ---------------------------------------------------------------------------
+# report_full_coverage script — markdown builder
+# ---------------------------------------------------------------------------
+
+
+def test_report_full_coverage_markdown_builder_runs():
+    """build_markdown produces a non-empty string with expected headings."""
+    from scripts.report_full_coverage import build_markdown
+    from app.services.coverage_service import generate_full_coverage_report
+
+    with SessionLocal() as db:
+        report = generate_full_coverage_report(db)
+
+    md = build_markdown(report)
+    assert "## Politicians" in md
+    assert "## Committees" in md
+    assert "## Recommendations" in md
+    assert "Coverage caveat" in md
+
+
+# ---------------------------------------------------------------------------
+# run_full_ingestion.py — dry-run produces no DB changes
+# ---------------------------------------------------------------------------
+
+
+def test_run_full_ingestion_dry_run_flag_is_propagated():
+    """run_stage with dry_run=True appends --dry-run to the subprocess args."""
+    import subprocess
+    from unittest.mock import MagicMock, patch
+
+    from scripts.run_full_ingestion import run_stage
+
+    with patch("scripts.run_full_ingestion.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        run_stage("Test Stage", "some_script.py", ["--limit", "10"], dry_run=True)
+        call_args = mock_run.call_args[0][0]
+        assert "--dry-run" in call_args
+
+
+def test_run_stage_returns_false_on_nonzero_exit():
+    """run_stage returns False when the subprocess exits non-zero."""
+    from unittest.mock import MagicMock, patch
+
+    from scripts.run_full_ingestion import run_stage
+
+    with patch("scripts.run_full_ingestion.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1)
+        result = run_stage("Failing Stage", "some_script.py", [], dry_run=False)
+        assert result is False
+
+
+def test_run_stage_returns_true_on_success():
+    """run_stage returns True when the subprocess exits 0."""
+    from unittest.mock import MagicMock, patch
+
+    from scripts.run_full_ingestion import run_stage
+
+    with patch("scripts.run_full_ingestion.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0)
+        result = run_stage("OK Stage", "some_script.py", [], dry_run=False)
+        assert result is True

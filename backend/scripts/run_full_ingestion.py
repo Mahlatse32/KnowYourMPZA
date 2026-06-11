@@ -145,11 +145,20 @@ def main() -> None:
             False,
         )
 
-    # Stage 7: Full coverage report
+    # Stage 7: Full coverage report (JSON + Markdown)
     if not args.dry_run:
         results["coverage_report"] = run_stage(
             "Full coverage report",
-            "full_coverage_report.py",
+            "report_full_coverage.py",
+            [],
+            False,
+        )
+
+    # Stage 8: Search completeness checks
+    if not args.dry_run:
+        results["search_completeness"] = run_stage(
+            "Search completeness checks",
+            "check_search_completeness.py",
             [],
             False,
         )
