@@ -71,9 +71,9 @@ All scripts are idempotent. Re-running them updates existing records. Missing or
 | `GET` | `/votes` | List vote events. Filter by `chamber`. |
 | `GET` | `/votes/{id}` | Get a single vote event. |
 | `GET` | `/votes/{id}/records` | List vote records for an event. |
-| `GET` | `/committees/meetings` | List committee meetings. Filter by `committee_id`. |
-| `GET` | `/committees/meetings/{id}` | Get a single meeting. |
-| `GET` | `/committees/meetings/{id}/attendance` | List attendance records for a meeting. |
+| `GET` | `/committee-meetings` | List committee meetings. Filter by `committee_id`. |
+| `GET` | `/committee-meetings/{id}` | Get a single meeting. |
+| `GET` | `/committee-meetings/{id}/attendance` | List attendance records for a meeting. |
 
 All list endpoints support `limit` (default 50) and `offset` pagination.
 

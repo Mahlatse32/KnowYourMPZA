@@ -169,7 +169,7 @@ def _resolve_party(db: Session, name: str | None) -> Party | None:
 def _resolve_politician(db: Session, name: str | None) -> Politician | None:
     if not name:
         return None
-    return db.scalar(select(Politician).where(Politician.name == name))
+    return db.scalar(select(Politician).where(Politician.full_name == name))
 
 
 def _upsert_vote_record(db: Session, event: VoteEvent, data: dict[str, Any]) -> VoteRecord:

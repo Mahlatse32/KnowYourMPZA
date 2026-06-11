@@ -485,13 +485,13 @@ def test_get_vote_by_id_not_found(client):
 
 
 def test_get_meetings_endpoint_returns_list(client):
-    resp = client.get("/committees/meetings")
+    resp = client.get("/committee-meetings")
     assert resp.status_code == 200
     assert isinstance(resp.json(), list)
 
 
 def test_get_meeting_by_id_not_found(client):
-    resp = client.get(f"/committees/meetings/{uuid.uuid4()}")
+    resp = client.get(f"/committee-meetings/{uuid.uuid4()}")
     assert resp.status_code == 404
 
 
@@ -509,7 +509,7 @@ def test_get_meeting_attendance_endpoint(client, db):
     }
     meeting = upsert_committee_meeting(db, meeting_data)
     db.commit()
-    resp = client.get(f"/committees/meetings/{meeting.id}/attendance")
+    resp = client.get(f"/committee-meetings/{meeting.id}/attendance")
     assert resp.status_code == 200
     records = resp.json()
     assert len(records) == 1

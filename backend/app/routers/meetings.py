@@ -9,7 +9,7 @@ from app.models.committee_meeting import CommitteeMeeting
 from app.schemas.accountability import CommitteeAttendanceRead, CommitteeMeetingRead
 from app.services.accountability_service import list_committee_meetings
 
-router = APIRouter(prefix="/committees/meetings", tags=["meetings"])
+router = APIRouter(prefix="/committee-meetings", tags=["meetings"])
 
 
 @router.get("", response_model=list[CommitteeMeetingRead])
