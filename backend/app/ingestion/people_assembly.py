@@ -202,8 +202,8 @@ def normalize_name(name: str) -> str:
 
 def normalize_committee_name(name: str) -> str:
     name = " ".join(name.strip().split())
-    name = re.sub(r"^(committee|portfolio committee|select committee)\s+on\s+", "", name, flags=re.IGNORECASE)
-    name = re.sub(r"^(committee|portfolio committee|select committee)\s+for\s+", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"^(committee|portfolio committee|standing committee|select committee|joint committee)\s+on\s+", "", name, flags=re.IGNORECASE)
+    name = re.sub(r"^(committee|portfolio committee|standing committee|select committee|joint committee)\s+for\s+", "", name, flags=re.IGNORECASE)
     name = re.sub(r"\s+([,.;:])", r"\1", name)
     name = re.sub(r"([,.;:]){2,}", r"\1", name)
     return name.strip(" -,.;:")
