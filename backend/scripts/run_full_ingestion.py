@@ -64,6 +64,12 @@ def main() -> None:
     parser.add_argument("--skip-committees", action="store_true")
     parser.add_argument("--skip-pmg", action="store_true")
     parser.add_argument("--skip-questions", action="store_true")
+    parser.add_argument("--skip-bills", action="store_true")
+    parser.add_argument("--skip-votes", action="store_true")
+    parser.add_argument("--skip-committee-activity", action="store_true")
+    parser.add_argument("--bills-limit", type=int, default=None)
+    parser.add_argument("--votes-max-pages", type=int, default=20)
+    parser.add_argument("--meetings-max-pages", type=int, default=20)
     args = parser.parse_args()
 
     sleep_args = ["--sleep", str(args.sleep)]
@@ -133,6 +139,36 @@ def main() -> None:
             "Full parliamentary questions ingestion",
             "ingest_questions_full.py",
             q_args,
+            args.dry_run,
+        )
+
+    # Stage 9: Bills
+    if not args.skip_bills:
+        bills_args: list[str] = []
+        results["bills"] = run_stage(
+            "Bills ingestion (PMG + parliament.gov.za)",
+            "ingest_bills.py",
+            bills_args,
+            args.dry_run,
+        )
+
+    # Stage 10: Vote events
+    if not args.skip_votes:
+        votes_args = ["--max-pages", str(args.votes_max_pages)]
+        results["votes"] = run_stage(
+            "Vote events ingestion (PMG)",
+            "ingest_votes.py",
+            votes_args,
+            args.dry_run,
+        )
+
+    # Stage 11: Committee activity (meetings + attendance)
+    if not args.skip_committee_activity:
+        meetings_args = ["--max-pages", str(args.meetings_max_pages)]
+        results["committee_activity"] = run_stage(
+            "Committee meeting activity ingestion (PMG)",
+            "ingest_committee_activity.py",
+            meetings_args,
             args.dry_run,
         )
 

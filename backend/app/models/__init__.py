@@ -1,5 +1,9 @@
 from app.db import Base
+from app.models.bill import Bill
+from app.models.bill_event import BillEvent
 from app.models.committee import Committee
+from app.models.committee_attendance import CommitteeAttendance
+from app.models.committee_meeting import CommitteeMeeting
 from app.models.committee_membership import CommitteeMembership
 from app.models.document import Document
 from app.models.document_mention import DocumentMention
@@ -12,10 +16,16 @@ from app.models.politician_alias import PoliticianAlias
 from app.models.question_mention import QuestionMention
 from app.models.source import Source
 from app.models.unresolved_entity import UnresolvedEntity
+from app.models.vote_event import VoteEvent
+from app.models.vote_record import VoteRecord
 
 __all__ = [
     "Base",
+    "Bill",
+    "BillEvent",
     "Committee",
+    "CommitteeAttendance",
+    "CommitteeMeeting",
     "CommitteeMembership",
     "Document",
     "DocumentMention",
@@ -28,4 +38,6 @@ __all__ = [
     "QuestionMention",
     "Source",
     "UnresolvedEntity",
+    "VoteEvent",
+    "VoteRecord",
 ]

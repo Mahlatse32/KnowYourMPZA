@@ -3,17 +3,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import (
+    bills,
     committees,
     documents,
     health,
     ingest,
     ingestion_runs,
+    meetings,
     parties,
     politicians,
     quality,
     questions,
     search,
     unresolved_entities,
+    votes,
 )
 
 app = FastAPI(
@@ -41,3 +44,6 @@ app.include_router(ingest.router)
 app.include_router(ingestion_runs.router)
 app.include_router(quality.router)
 app.include_router(unresolved_entities.router)
+app.include_router(bills.router)
+app.include_router(votes.router)
+app.include_router(meetings.router)
