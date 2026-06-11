@@ -443,26 +443,37 @@ def test_full_coverage_pct_fields_are_none_or_float():
 
 def test_ingest_people_assembly_is_idempotent(monkeypatch):
     html = """
-    <html><body>
-      <h1 class="profile-name">Idempotent Test MP</h1>
-      <p class="party-name"><a href="/party/test-party/">Test Party</a></p>
-      <p class="province">Gauteng</p>
+    <html><head>
+      <meta property="profile:first_name" content="Idempotent">
+      <meta property="profile:last_name" content="Tester">
+    </head><body>
+      <h1 class="mp-name">Idempotent Tester</h1>
+      <div class="mp-block">
+        <div class="mp-block__title">Political party:</div>
+        <a href="/party/test-party/">Test Party</a>
+      </div>
+      Member of the National Assembly
     </body></html>
     """
-    url = "https://www.pa.org.za/person/idempotent-test-mp/"
+    url = "https://www.pa.org.za/person/idempotent-tester/"
     # ingestion_service imports fetch_page as fetch_people_assembly_page at module load;
     # patch the already-bound name in ingestion_service, not the source module attribute.
     monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
 
     response1 = client.post("/ingest/people-assembly", json={"urls": [url]})
     assert response1.status_code == 200
+    assert response1.json()["processed_count"] == 1
+    assert response1.json()["failed_count"] == 0
 
     response2 = client.post("/ingest/people-assembly", json={"urls": [url]})
     assert response2.status_code == 200
+    assert response2.json()["processed_count"] == 1
+    assert response2.json()["failed_count"] == 0
 
     politicians = client.get("/politicians?limit=500").json()
-    count = sum(1 for p in politicians if p["display_name"] == "Idempotent Test MP")
-    assert count == 1, f"Expected 1 record, got {count}"
+    matches = [p for p in politicians if p["display_name"] == "Idempotent Tester"]
+    assert len(matches) == 1, f"Expected 1 record, got {len(matches)}"
+    assert matches[0]["profile_url"] == url
 
 
 # ---------------------------------------------------------------------------
@@ -472,26 +483,40 @@ def test_ingest_people_assembly_is_idempotent(monkeypatch):
 
 def test_politician_search_finds_by_alias(monkeypatch):
     html = """
-    <html><body>
-      <h1 class="profile-name">Alias Search Test</h1>
-      <p class="party-name"><a href="/party/demo-party/">Demo Party</a></p>
-      <p class="province">Western Cape</p>
+    <html><head>
+      <meta property="profile:first_name" content="Nandi">
+      <meta property="profile:last_name" content="Aliasfinder">
+    </head><body>
+      <h1 class="mp-name">Nandi Aliasfinder</h1>
+      <div class="mp-block">
+        <div class="mp-block__title">Political party:</div>
+        <a href="/party/demo-party/">Demo Party</a>
+      </div>
+      Member of the National Assembly
     </body></html>
     """
-    url = "https://www.pa.org.za/person/alias-search-test/"
+    url = "https://www.pa.org.za/person/nandi-aliasfinder/"
     monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
 
-    client.post("/ingest/people-assembly", json={"urls": [url]})
+    response = client.post("/ingest/people-assembly", json={"urls": [url]})
+    assert response.status_code == 200
+    assert response.json()["processed_count"] == 1
+    assert response.json()["failed_count"] == 0
 
     with SessionLocal() as db:
         politician = next(
-            (p for p in db.execute(select(__import__("app.models.politician", fromlist=["Politician"]).Politician)).scalars() if p.display_name == "Alias Search Test"),
+            (p for p in db.execute(select(__import__("app.models.politician", fromlist=["Politician"]).Politician)).scalars() if p.display_name == "Nandi Aliasfinder"),
             None,
         )
         assert politician is not None
         aliases = list(db.scalars(select(PoliticianAlias).where(PoliticianAlias.politician_id == politician.id)))
         alias_values = {a.alias for a in aliases}
-        assert len(alias_values) > 0, "Expected at least one alias to be generated"
+        assert "Mr Aliasfinder" in alias_values
+
+    search = client.get("/search", params={"name": "Mr Aliasfinder"})
+    assert search.status_code == 200
+    results = search.json()
+    assert any(result["id"] == str(politician.id) for result in results)
 
 
 # ---------------------------------------------------------------------------
