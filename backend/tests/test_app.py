@@ -450,7 +450,9 @@ def test_ingest_people_assembly_is_idempotent(monkeypatch):
     </body></html>
     """
     url = "https://www.pa.org.za/person/idempotent-test-mp/"
-    monkeypatch.setattr("app.ingestion.people_assembly.fetch_url", lambda u, sleep=0.5: html)
+    # ingestion_service imports fetch_page as fetch_people_assembly_page at module load;
+    # patch the already-bound name in ingestion_service, not the source module attribute.
+    monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
 
     response1 = client.post("/ingest/people-assembly", json={"urls": [url]})
     assert response1.status_code == 200
@@ -477,7 +479,7 @@ def test_politician_search_finds_by_alias(monkeypatch):
     </body></html>
     """
     url = "https://www.pa.org.za/person/alias-search-test/"
-    monkeypatch.setattr("app.ingestion.people_assembly.fetch_url", lambda u, sleep=0.5: html)
+    monkeypatch.setattr("app.services.ingestion_service.fetch_people_assembly_page", lambda _: html)
 
     client.post("/ingest/people-assembly", json={"urls": [url]})
 
@@ -673,7 +675,9 @@ def test_pmg_ingestion_is_idempotent(monkeypatch):
       <p>5 June 2026</p>
     </body></html>
     """
-    monkeypatch.setattr("app.ingestion.pmg.fetch_page", lambda _: html)
+    # ingestion_service imports fetch_page from pmg as fetch_pmg_page at module load;
+    # patch the already-bound name in ingestion_service, not the source module attribute.
+    monkeypatch.setattr("app.services.ingestion_service.fetch_pmg_page", lambda _: html)
     response1 = client.post("/ingest/pmg-documents", json={"urls": [url]})
     response2 = client.post("/ingest/pmg-documents", json={"urls": [url]})
     assert response1.status_code == 200
