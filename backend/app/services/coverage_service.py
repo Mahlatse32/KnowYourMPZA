@@ -8,7 +8,10 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.bill import Bill
 from app.models.committee import Committee
+from app.models.committee_attendance import CommitteeAttendance
+from app.models.committee_meeting import CommitteeMeeting
 from app.models.committee_membership import CommitteeMembership
 from app.models.document import Document
 from app.models.document_mention import DocumentMention
@@ -20,6 +23,8 @@ from app.models.politician import Politician
 from app.models.politician_alias import PoliticianAlias
 from app.models.question_mention import QuestionMention
 from app.models.unresolved_entity import UnresolvedEntity
+from app.models.vote_event import VoteEvent
+from app.models.vote_record import VoteRecord
 
 
 def generate_full_coverage_report(db: Session) -> dict:
@@ -127,6 +132,23 @@ def generate_full_coverage_report(db: Session) -> dict:
         .limit(20)
     ).all():
         unresolved_by_source[row[0]] = row[1]
+
+    total_bills = _count(db, Bill)
+    bills_with_source = db.scalar(select(func.count()).select_from(Bill).where(Bill.source_url.is_not(None))) or 0
+    bills_introduced = db.scalar(select(func.count()).select_from(Bill).where(Bill.status == "introduced")) or 0
+    bills_passed = db.scalar(select(func.count()).select_from(Bill).where(Bill.status == "passed")) or 0
+    bills_assented = db.scalar(select(func.count()).select_from(Bill).where(Bill.status == "assented")) or 0
+
+    total_vote_events = _count(db, VoteEvent)
+    vote_events_with_source = db.scalar(select(func.count()).select_from(VoteEvent).where(VoteEvent.source_url.is_not(None))) or 0
+    total_vote_records = _count(db, VoteRecord)
+    individual_vote_records = db.scalar(select(func.count()).select_from(VoteRecord).where(VoteRecord.record_level == "individual")) or 0
+    party_vote_records = db.scalar(select(func.count()).select_from(VoteRecord).where(VoteRecord.record_level == "party")) or 0
+
+    total_committee_meetings = _count(db, CommitteeMeeting)
+    meetings_with_source = db.scalar(select(func.count()).select_from(CommitteeMeeting).where(CommitteeMeeting.source_url.is_not(None))) or 0
+    total_attendance = _count(db, CommitteeAttendance)
+    resolved_attendance = db.scalar(select(func.count()).select_from(CommitteeAttendance).where(CommitteeAttendance.politician_id.is_not(None))) or 0
 
     total_ingestion_runs = _count(db, IngestionRun)
     failed_runs = db.scalar(
@@ -300,6 +322,20 @@ def generate_full_coverage_report(db: Session) -> dict:
             "unresolved_entities_open": unresolved_open,
             "unresolved_entities_resolved": unresolved_resolved,
             "unresolved_entities_ignored": unresolved_ignored,
+            "bills_total": total_bills,
+            "bills_with_source_url": bills_with_source,
+            "bills_introduced": bills_introduced,
+            "bills_passed": bills_passed,
+            "bills_assented": bills_assented,
+            "vote_events_total": total_vote_events,
+            "vote_events_with_source_url": vote_events_with_source,
+            "vote_records_total": total_vote_records,
+            "vote_records_individual": individual_vote_records,
+            "vote_records_party": party_vote_records,
+            "committee_meetings_total": total_committee_meetings,
+            "committee_meetings_with_source_url": meetings_with_source,
+            "committee_attendance_total": total_attendance,
+            "committee_attendance_resolved": resolved_attendance,
             "ingestion_runs_total": total_ingestion_runs,
             "failed_ingestion_runs": failed_runs,
         },
@@ -368,6 +404,20 @@ def generate_full_coverage_report(db: Session) -> dict:
         },
         "latest_ingestion_runs": latest_runs,
         "latest_ingestion_errors": latest_errors,
+        "accountability_coverage": {
+            "bills_total": total_bills,
+            "bills_with_source_url_pct": _pct(bills_with_source, total_bills),
+            "bills_introduced": bills_introduced,
+            "bills_passed": bills_passed,
+            "bills_assented": bills_assented,
+            "vote_events_total": total_vote_events,
+            "vote_records_total": total_vote_records,
+            "vote_records_individual": individual_vote_records,
+            "vote_records_party": party_vote_records,
+            "committee_meetings_total": total_committee_meetings,
+            "committee_attendance_total": total_attendance,
+            "attendance_resolved_pct": _pct(resolved_attendance, total_attendance),
+        },
         "recommendations": recommendations,
     }
 
