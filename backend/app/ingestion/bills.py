@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 _PARLIAMENT_BILLS_URL = "https://www.parliament.gov.za/bills"
 _PMG_BILLS_URL = "https://pmg.org.za/bills/"
+_PMG_API_BILLS_URL = "https://api.pmg.org.za/bill/"
 
 BILL_STATUSES = {
     "introduced": "introduced",
@@ -117,6 +118,84 @@ def parse_parliament_bills(html: str, source_url: str = _PARLIAMENT_BILLS_URL) -
             }
         )
     return bills
+
+
+# ---------------------------------------------------------------------------
+# PMG JSON API (the HTML pages at pmg.org.za/bills/ are JS-rendered shells,
+# so the documented public API at api.pmg.org.za is the reliable source).
+# ---------------------------------------------------------------------------
+
+def pmg_api_page_url(page: int) -> str:
+    return f"{_PMG_API_BILLS_URL}?page={page}"
+
+
+def bill_detail_api_url(source_url: str | None) -> str | None:
+    """Map a stored human bill URL (https://pmg.org.za/bill/<id>/) to its API detail URL."""
+    if not source_url:
+        return None
+    m = re.search(r"pmg\.org\.za/bill/(\d+)", source_url)
+    if not m:
+        return None
+    return f"https://api.pmg.org.za/bill/{m.group(1)}/"
+
+
+def _iso_to_date(value) -> Any:
+    if not value:
+        return None
+    from datetime import date as _date
+
+    try:
+        return _date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def parse_pmg_api_bill(item: dict) -> dict[str, Any]:
+    """Map one PMG API bill object to our bill dict shape."""
+    status_obj = item.get("status") or {}
+    status_name = status_obj.get("name", "") if isinstance(status_obj, dict) else str(status_obj or "")
+    bill_id = item.get("id")
+    source_url = f"https://pmg.org.za/bill/{bill_id}/" if bill_id else None
+    # Drafts have number=None and share the placeholder code "X-<year>".
+    # Using that as bill_number would collapse distinct drafts under the
+    # uq_bill_number_year_house constraint, so leave it None instead.
+    bill_number = item.get("code") if item.get("number") is not None else None
+    return {
+        "title": item.get("title") or "Untitled bill",
+        "short_title": None,
+        "bill_number": bill_number,
+        "year": item.get("year"),
+        "house": None,
+        "status": _normalize_status(status_name),
+        "introduced_date": _iso_to_date(item.get("date_of_introduction")),
+        "assented_date": _iso_to_date(item.get("date_of_assent")),
+        "act_number": item.get("act_name"),
+        "source_url": source_url,
+        "source_type": "pmg-api",
+        "events": parse_pmg_api_bill_events(item, source_url),
+    }
+
+
+def parse_pmg_api_bills(payload: dict) -> list[dict[str, Any]]:
+    """Parse one page of the PMG bills API listing."""
+    return [parse_pmg_api_bill(item) for item in payload.get("results", [])]
+
+
+def parse_pmg_api_bill_events(item: dict, source_url: str | None = None) -> list[dict[str, Any]]:
+    """Map the events list of a PMG API bill detail object to bill_event dicts."""
+    if source_url is None and item.get("id"):
+        source_url = f"https://pmg.org.za/bill/{item['id']}/"
+    events: list[dict[str, Any]] = []
+    for event in item.get("events") or []:
+        events.append(
+            {
+                "event_type": event.get("type") or "unknown",
+                "event_date": _iso_to_date(event.get("date")),
+                "description": (event.get("title") or "")[:1000] or None,
+                "source_url": source_url,
+            }
+        )
+    return events
 
 
 EVENT_TYPE_KEYWORDS = [
