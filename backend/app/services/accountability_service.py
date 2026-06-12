@@ -3,7 +3,7 @@ import logging
 from datetime import date
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.bill import Bill
@@ -134,6 +134,11 @@ def upsert_vote_event(db: Session, data: dict[str, Any]) -> VoteEvent:
     if source_url:
         event = db.scalar(select(VoteEvent).where(VoteEvent.source_url == source_url))
 
+    committee_id = data.get("committee_id")
+    if committee_id is None and data.get("committee_name"):
+        committee = _resolve_committee(db, data["committee_name"])
+        committee_id = committee.id if committee else None
+
     if event is None:
         event = VoteEvent(
             title=data["title"],
@@ -142,7 +147,7 @@ def upsert_vote_event(db: Session, data: dict[str, Any]) -> VoteEvent:
             vote_type=data.get("vote_type", "unknown"),
             result=data.get("result"),
             bill_id=data.get("bill_id"),
-            committee_id=data.get("committee_id"),
+            committee_id=committee_id,
             source_url=source_url,
             source_type=data.get("source_type"),
         )
@@ -163,7 +168,29 @@ def upsert_vote_event(db: Session, data: dict[str, Any]) -> VoteEvent:
 def _resolve_party(db: Session, name: str | None) -> Party | None:
     if not name:
         return None
-    return db.scalar(select(Party).where(Party.name == name))
+    return db.scalar(
+        select(Party).where(
+            (func.lower(Party.name) == name.lower()) | (func.lower(Party.short_name) == name.lower())
+        )
+    )
+
+
+def _resolve_committee(db: Session, name: str | None) -> Committee | None:
+    """Match a source committee name to an existing Committee, normalizing
+    common prefixes ("Portfolio Committee on ..."). Returns None when no
+    confident match exists — meetings are stored unlinked rather than
+    linked to the wrong committee."""
+    if not name:
+        return None
+    from app.ingestion.people_assembly import normalize_committee_name
+
+    normalized = normalize_committee_name(name)
+    return db.scalar(
+        select(Committee).where(
+            (func.lower(Committee.name) == name.lower())
+            | (func.lower(Committee.name) == normalized.lower())
+        )
+    )
 
 
 def _resolve_politician(db: Session, name: str | None) -> Politician | None:
@@ -183,6 +210,11 @@ def _upsert_vote_record(db: Session, event: VoteEvent, data: dict[str, Any]) -> 
         VoteRecord.vote_event_id == event.id,
         VoteRecord.record_level == record_level,
     )
+    # Party-level and aggregate records legitimately carry one row per
+    # vote_value (e.g. ANC yes-count AND ANC no-count); matching must
+    # include vote_value or those rows collapse into one.
+    if politician_id is None:
+        stmt = stmt.where(VoteRecord.vote_value == data.get("vote_value", "unknown"))
     if politician_id is not None:
         stmt = stmt.where(VoteRecord.politician_id == politician_id)
     else:
@@ -239,9 +271,14 @@ def upsert_committee_meeting(db: Session, data: dict[str, Any], committee: Commi
     if source_url:
         meeting = db.scalar(select(CommitteeMeeting).where(CommitteeMeeting.source_url == source_url))
 
+    committee_id = committee.id if committee else data.get("committee_id")
+    if committee_id is None and data.get("committee_name"):
+        resolved = _resolve_committee(db, data["committee_name"])
+        committee_id = resolved.id if resolved else None
+
     if meeting is None:
         meeting = CommitteeMeeting(
-            committee_id=committee.id if committee else data.get("committee_id"),
+            committee_id=committee_id,
             title=data["title"],
             date=data.get("date"),
             summary=data.get("summary"),
@@ -255,6 +292,8 @@ def upsert_committee_meeting(db: Session, data: dict[str, Any], committee: Commi
     else:
         if data.get("summary"):
             meeting.summary = data["summary"]
+        if meeting.committee_id is None and committee_id is not None:
+            meeting.committee_id = committee_id
         db.flush()
 
     for attendance_data in data.get("attendance", []):

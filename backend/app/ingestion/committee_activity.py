@@ -10,6 +10,17 @@ from bs4 import BeautifulSoup
 logger = logging.getLogger(__name__)
 
 _PMG_MEETINGS_URL = "https://pmg.org.za/committee-meetings/"
+_PMG_API_MEETINGS_URL = "https://api.pmg.org.za/committee-meeting/"
+
+# Explicit attendance codes used by the PMG API.
+ATTENDANCE_CODE_MAP = {
+    "P": "present",
+    "A": "absent",
+    "AP": "apology",
+    "L": "present",    # arrived late — still attended
+    "DE": "present",   # departed early — still attended
+    "LDE": "present",
+}
 
 ATTENDANCE_STATUS_MAP = {
     "present": "present",
@@ -25,6 +36,86 @@ def fetch_page(url: str, timeout: int = 20) -> str:
     resp = requests.get(url, timeout=timeout, headers={"User-Agent": "KnowYourMPZA/1.0"})
     resp.raise_for_status()
     return resp.text
+
+
+# ---------------------------------------------------------------------------
+# PMG JSON API (the HTML pages at pmg.org.za are JS-rendered shells; the
+# public API at api.pmg.org.za is the reliable source).
+# ---------------------------------------------------------------------------
+
+def pmg_meetings_api_url(page: int) -> str:
+    return f"{_PMG_API_MEETINGS_URL}?page={page}"
+
+
+def meeting_attendance_api_url(meeting_id: int) -> str:
+    return f"{_PMG_API_MEETINGS_URL}{meeting_id}/attendance/"
+
+
+def meeting_detail_api_url(meeting_id: int) -> str:
+    return f"{_PMG_API_MEETINGS_URL}{meeting_id}/"
+
+
+def _iso_to_date(value) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def parse_pmg_api_meetings(payload: dict) -> list[dict[str, Any]]:
+    """Map one page of the PMG committee-meeting API listing to meeting dicts."""
+    meetings: list[dict[str, Any]] = []
+    for item in payload.get("results", []):
+        meeting_id = item.get("id")
+        if not meeting_id:
+            continue
+        committee = item.get("committee") or {}
+        house = committee.get("house") or {}
+        source_url = f"https://pmg.org.za/committee-meeting/{meeting_id}/"
+        meetings.append(
+            {
+                "api_id": meeting_id,
+                "title": item.get("title") or "Untitled meeting",
+                "date": _iso_to_date(item.get("date")),
+                "committee_name": committee.get("name") if isinstance(committee, dict) else None,
+                "house": house.get("name") if isinstance(house, dict) else None,
+                "summary": None,
+                "source_url": source_url,
+                "pmg_url": source_url,
+                "source_type": "pmg-api",
+                "attendance": [],
+            }
+        )
+    return meetings
+
+
+def parse_pmg_api_attendance(payload: dict, source_url: str | None = None) -> list[dict[str, Any]]:
+    """Map the per-meeting attendance API response to attendance dicts.
+
+    Only explicit records are produced: each row carries the member's name
+    and the API's attendance code. Unknown codes map to "unknown" rather
+    than being guessed.
+    """
+    rows: list[dict[str, Any]] = []
+    for record in payload.get("results", []):
+        member = record.get("member") or {}
+        name = member.get("name") if isinstance(member, dict) else None
+        if not name:
+            continue
+        party = member.get("party") or {}
+        code = (record.get("attendance") or "").strip().upper()
+        rows.append(
+            {
+                "name_raw": name,
+                "party_name": party.get("name") if isinstance(party, dict) else None,
+                "attendance_status": ATTENDANCE_CODE_MAP.get(code, "unknown"),
+                "confidence": 1.0,  # explicit source data, not inferred
+                "source_url": source_url,
+            }
+        )
+    return rows
 
 
 def _normalize_attendance(text: str) -> str:

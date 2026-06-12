@@ -43,6 +43,128 @@ def fetch_page(url: str, timeout: int = 20) -> str:
     return resp.text
 
 
+# ---------------------------------------------------------------------------
+# PMG JSON API vote-signal detection.
+#
+# PMG exposes no /vote/ or /division/ endpoint (both 404). Vote and division
+# signals therefore come from committee-meeting minutes text (the "body"
+# field of /committee-meeting/<id>/). Only explicit textual signals create
+# VoteEvents, and VoteRecords are created only when explicit counts appear.
+# ---------------------------------------------------------------------------
+
+# Ordered: the first matching signal determines the result. More specific
+# phrases come first.
+VOTE_SIGNALS: list[tuple[str, str, str]] = [
+    # (phrase, vote_type, result)
+    ("amendment agreed to", "amendment", "agreed_to"),
+    ("amendment rejected", "amendment", "negatived"),
+    ("amendment negatived", "amendment", "negatived"),
+    ("bill was negatived", "bill_vote", "negatived"),
+    ("bill was agreed to", "bill_vote", "agreed_to"),
+    ("bill was adopted", "bill_vote", "adopted"),
+    ("motion was agreed to", "motion", "agreed_to"),
+    ("motion was negatived", "motion", "negatived"),
+    ("negatived", "unknown", "negatived"),
+    ("agreed to", "unknown", "agreed_to"),
+    ("adopted", "unknown", "adopted"),
+]
+
+# A division/vote must actually be signalled for an event to exist at all.
+DIVISION_MARKERS = [
+    "division",
+    "votes in favour",
+    "votes against",
+    "abstention",
+    "voted in favour",
+    "voted against",
+    "put to a vote",
+    "put to the vote",
+]
+
+_COUNT_PATTERNS = [
+    (re.compile(r"(\d+)\s+vot(?:es|ed)\s+in\s+favour", re.IGNORECASE), "yes"),
+    (re.compile(r"(\d+)\s+vot(?:es|ed)\s+against", re.IGNORECASE), "no"),
+    (re.compile(r"(\d+)\s+abstentions?", re.IGNORECASE), "abstain"),
+]
+
+
+def html_to_text(html: str) -> str:
+    return BeautifulSoup(html or "", "html.parser").get_text(" ", strip=True)
+
+
+def detect_vote_signal(text: str) -> dict[str, str] | None:
+    """Return {vote_type, result} if the text contains an explicit division/vote
+    signal, else None. Outcome words alone ("adopted") do not count without a
+    division marker — minutes adopt agendas constantly."""
+    low = (text or "").lower()
+    if not any(marker in low for marker in DIVISION_MARKERS):
+        return None
+    for phrase, vote_type, result in VOTE_SIGNALS:
+        if phrase in low:
+            return {"vote_type": vote_type, "result": result}
+    # A division happened but the outcome wording is unrecognised: model the
+    # limitation rather than inventing a result.
+    return {"vote_type": "unknown", "result": None}
+
+
+def extract_aggregate_counts(text: str, source_url: str | None = None) -> list[dict[str, Any]]:
+    """Extract explicit aggregate vote counts ("X votes in favour, Y against,
+    Z abstentions") as aggregate-level vote records. Returns [] when the text
+    exposes no explicit counts — records are never inferred."""
+    low = text or ""
+    records: list[dict[str, Any]] = []
+    for pattern, vote_value in _COUNT_PATTERNS:
+        m = pattern.search(low)
+        if m:
+            records.append(
+                {
+                    "politician_name": None,
+                    "party_name": None,
+                    "vote_value": vote_value,
+                    "record_level": "aggregate",
+                    "count": int(m.group(1)),
+                    "confidence": "high",
+                    "source_url": source_url,
+                }
+            )
+    return records
+
+
+def build_vote_event_from_meeting(detail: dict) -> dict[str, Any] | None:
+    """Build a vote_event dict from a PMG committee-meeting detail payload,
+    or None if the minutes expose no explicit vote/division signal."""
+    meeting_id = detail.get("id")
+    body_text = html_to_text(detail.get("body") or "")
+    if not body_text:
+        return None
+    signal = detect_vote_signal(body_text)
+    if not signal:
+        return None
+    source_url = f"https://pmg.org.za/committee-meeting/{meeting_id}/" if meeting_id else None
+    committee = detail.get("committee") or {}
+    house = committee.get("house") or {}
+    title = detail.get("title") or "Untitled meeting"
+    event_date = None
+    if detail.get("date"):
+        from datetime import date as _date
+
+        try:
+            event_date = _date.fromisoformat(str(detail["date"])[:10])
+        except ValueError:
+            event_date = None
+    return {
+        "title": f"Committee decision: {title}"[:500],
+        "date": event_date,
+        "chamber": house.get("name") if isinstance(house, dict) else None,
+        "vote_type": "committee_decision" if signal["vote_type"] == "unknown" else signal["vote_type"],
+        "result": signal["result"],
+        "committee_name": committee.get("name") if isinstance(committee, dict) else None,
+        "source_url": source_url,
+        "source_type": "pmg-api",
+        "vote_records": extract_aggregate_counts(body_text, source_url),
+    }
+
+
 def _normalize_vote_type(text: str) -> str:
     low = text.lower()
     for k, v in VOTE_TYPE_MAP.items():
