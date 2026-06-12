@@ -11,7 +11,13 @@ from sqlalchemy.pool import StaticPool
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from app.db import Base
-from app.ingestion.bills import parse_bill_history
+from app.ingestion.bills import (
+    bill_detail_api_url,
+    parse_bill_history,
+    parse_pmg_api_bill,
+    parse_pmg_api_bill_events,
+    parse_pmg_api_bills,
+)
 from app.models.bill import Bill
 from app.models.bill_event import BillEvent
 from app.services.accountability_service import upsert_bill
@@ -218,3 +224,99 @@ def test_should_discover_discover_only():
 
 def test_should_discover_real_run():
     assert should_discover(dry_run=False, discover=False, discover_only=False) is True
+
+
+# ---------------------------------------------------------------------------
+# PMG API parsing
+# ---------------------------------------------------------------------------
+
+PMG_API_BILL = {
+    "id": 1000,
+    "title": "Appropriation Bill",
+    "number": 4,
+    "year": 2021,
+    "code": "B4-2021",
+    "date_of_introduction": "2021-02-24",
+    "date_of_assent": "2021-07-20",
+    "act_name": "Act 8 of 2021",
+    "status": {"id": 7, "name": "act-commenced", "description": "Act commenced"},
+    "events": [
+        {"date": "2021-02-24T02:02:00+00:00", "type": "bill-introduced", "title": "Bill introduced to the National Assembly"},
+        {"date": "2021-05-04T07:50:00+00:00", "type": "committee-meeting", "title": "National Treasury briefing"},
+    ],
+}
+
+
+def test_parse_pmg_api_bill_maps_fields():
+    bill = parse_pmg_api_bill(PMG_API_BILL)
+    assert bill["title"] == "Appropriation Bill"
+    assert bill["bill_number"] == "B4-2021"
+    assert bill["year"] == 2021
+    assert bill["status"] == "assented"  # "act-commenced" contains "act"
+    assert bill["introduced_date"] == date(2021, 2, 24)
+    assert bill["assented_date"] == date(2021, 7, 20)
+    assert bill["source_url"] == "https://pmg.org.za/bill/1000/"
+    assert bill["source_type"] == "pmg-api"
+    assert len(bill["events"]) == 2
+
+
+def test_parse_pmg_api_bill_draft_has_no_bill_number():
+    """Drafts share the placeholder code X-<year>; storing it as bill_number
+    would collapse distinct drafts under uq_bill_number_year_house."""
+    draft = {**PMG_API_BILL, "id": 1349, "number": None, "code": "X-2026", "year": 2026}
+    bill = parse_pmg_api_bill(draft)
+    assert bill["bill_number"] is None
+    assert bill["source_url"] == "https://pmg.org.za/bill/1349/"
+
+
+def test_parse_pmg_api_bills_listing():
+    payload = {"count": 2, "next": None, "results": [PMG_API_BILL, {**PMG_API_BILL, "id": 1001, "status": None, "events": []}]}
+    bills = parse_pmg_api_bills(payload)
+    assert len(bills) == 2
+    assert bills[1]["status"] == "unknown"
+    assert bills[1]["source_url"] == "https://pmg.org.za/bill/1001/"
+
+
+def test_parse_pmg_api_bill_events():
+    events = parse_pmg_api_bill_events(PMG_API_BILL)
+    assert len(events) == 2
+    assert events[0]["event_type"] == "bill-introduced"
+    assert events[0]["event_date"] == date(2021, 2, 24)
+    assert all(e["source_url"] == "https://pmg.org.za/bill/1000/" for e in events)
+
+
+def test_bill_detail_api_url():
+    assert bill_detail_api_url("https://pmg.org.za/bill/1000/") == "https://api.pmg.org.za/bill/1000/"
+    assert bill_detail_api_url("https://www.parliament.gov.za/bills") is None
+    assert bill_detail_api_url(None) is None
+
+
+def test_backfill_uses_api_for_pmg_bills(db):
+    """Bills with pmg.org.za/bill/<id>/ source URLs fetch the JSON API detail."""
+    import json
+
+    bill = upsert_bill(
+        db,
+        {
+            "title": "API Backfill Bill",
+            "bill_number": "B4-2021",
+            "year": 2021,
+            "house": None,
+            "status": "assented",
+            "source_url": "https://pmg.org.za/bill/1000/",
+            "source_type": "pmg-api",
+            "events": [],
+        },
+    )
+    db.commit()
+    calls = []
+
+    def fake_fetch(url):
+        calls.append(url)
+        return json.dumps(PMG_API_BILL)
+
+    summary = run_backfill(db, dry_run=False, sleep=0, fetch=fake_fetch)
+    assert calls == ["https://api.pmg.org.za/bill/1000/"]
+    assert summary["events_created"] == 2
+    events = list(db.scalars(select(BillEvent).where(BillEvent.bill_id == bill.id)))
+    assert {e.event_type for e in events} == {"bill-introduced", "committee-meeting"}

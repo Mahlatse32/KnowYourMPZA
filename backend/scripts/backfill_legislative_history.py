@@ -29,7 +29,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.ingestion.bills import fetch_page, parse_bill_history
+from app.ingestion.bills import (
+    bill_detail_api_url,
+    fetch_page,
+    parse_bill_history,
+    parse_pmg_api_bill_events,
+)
 from app.models.bill import Bill
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -80,9 +85,21 @@ def run_backfill(
             logger.info("max-pages limit (%d) reached, stopping.", max_pages)
             break
         try:
-            html = fetch(bill.source_url)
-            summary["pages_fetched"] += 1
-            events = parse_bill_history(html, bill.source_url)
+            # PMG bills resolve to the JSON API detail endpoint (the human
+            # page at pmg.org.za is a JS shell with no event data); other
+            # sources fall back to HTML parsing.
+            api_url = bill_detail_api_url(bill.source_url)
+            if api_url:
+                import json
+
+                raw = fetch(api_url)
+                summary["pages_fetched"] += 1
+                payload = raw if isinstance(raw, dict) else json.loads(raw)
+                events = parse_pmg_api_bill_events(payload, bill.source_url)
+            else:
+                html = fetch(bill.source_url)
+                summary["pages_fetched"] += 1
+                events = parse_bill_history(html, bill.source_url)
             summary["events_parsed"] += len(events)
             if dry_run:
                 logger.info("dry-run: %s -> %d events parsed (not written).", bill.source_url, len(events))
