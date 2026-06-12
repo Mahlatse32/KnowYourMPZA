@@ -1,43 +1,65 @@
 #!/usr/bin/env python3
-"""Ingest vote events from PMG (index page + individual vote pages).
+"""Ingest vote/division events detected in PMG committee meeting minutes.
 
-Dry-run semantics (same convention as ingest_bills.py):
+PMG exposes no /vote/ or /division/ API endpoint (both 404), so vote signals
+are detected from the minutes text ("body") of committee-meeting detail
+pages: https://api.pmg.org.za/committee-meeting/<id>/.
+
+Rules (source-backed only):
+  - A VoteEvent is created only when the minutes contain an explicit
+    division/vote marker (division, votes in favour/against, abstentions,
+    put to a/the vote ...).
+  - VoteRecords are created only from explicit aggregate counts in the text
+    ("X votes in favour", "Y votes against", "Z abstentions"),
+    record_level="aggregate".
+  - Individual MP votes are NEVER inferred from party positions.
+  - If only the outcome is known, a VoteEvent is created with no records.
+
+Dry-run semantics:
   --dry-run                 Fast and offline: prints the plan, no network,
                             no DB writes.
-  --dry-run --discover      Fetches the index and up to --max-pages vote
-                            pages and prints what WOULD be upserted.
-                            Still no DB writes.
+  --dry-run --discover      Fetches bounded API pages, no DB writes.
 
 Examples:
     python scripts/ingest_votes.py --dry-run
-    python scripts/ingest_votes.py --dry-run --discover --limit 10 --max-pages 5 --sleep 0.5
-    python scripts/ingest_votes.py --limit 10 --max-pages 10 --sleep 0.5
+    python scripts/ingest_votes.py --dry-run --discover --limit 20 --max-pages 2 --sleep 0.5
+    python scripts/ingest_votes.py --limit 20 --max-pages 2 --from-date 2026-01-01 --sleep 0.5
 """
 import argparse
+import json
 import logging
 import sys
 import time
+from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.ingestion.votes import (
-    fetch_page,
-    parse_pmg_vote_event,
-    parse_pmg_votes_index,
-    _PMG_VOTES_URL,
+from app.ingestion.committee_activity import (
+    meeting_detail_api_url,
+    parse_pmg_api_meetings,
+    pmg_meetings_api_url,
 )
+from app.ingestion.votes import build_vote_event_from_meeting, fetch_page
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def _fetch_json(fetch, url: str) -> dict:
+    raw = fetch(url)
+    return raw if isinstance(raw, dict) else json.loads(raw)
 
 
 def run_votes_ingest(
     db,
     *,
     limit: int = 20,
-    max_pages: int = 20,
+    max_pages: int = 2,
+    start_page: int = 0,
     sleep: float = 0.5,
+    from_date: date | None = None,
+    to_date: date | None = None,
     dry_run: bool = False,
     discover: bool = False,
     fetch=fetch_page,
@@ -48,11 +70,15 @@ def run_votes_ingest(
     when dry_run is True and discover is False.
     """
     summary = {
-        "urls_discovered": 0,
-        "pages_fetched": 0,
+        "listing_pages_fetched": 0,
+        "detail_pages_fetched": 0,
+        "meetings_scanned": 0,
+        "vote_events_found": 0,
         "processed": 0,
         "created": 0,
         "updated": 0,
+        "vote_records": 0,
+        "outcome_only_events": 0,
         "failed": 0,
         "errors": [],
         "dry_run": dry_run,
@@ -62,44 +88,67 @@ def run_votes_ingest(
     if dry_run and not discover:
         logger.info(
             "dry-run: skipping live discovery (pass --discover to enable). "
-            "Would fetch %s then up to %d vote pages (limit %d).",
-            _PMG_VOTES_URL, max_pages, limit,
+            "Would scan up to %d listing page(s) of %s, detail-fetching up to %d meetings.",
+            max_pages, pmg_meetings_api_url(0), limit,
         )
         return summary
+
+    meetings: list[dict] = []
+    for page in range(start_page, start_page + max_pages):
+        url = pmg_meetings_api_url(page)
+        try:
+            payload = _fetch_json(fetch, url)
+        except Exception as exc:
+            summary["failed"] += 1
+            summary["errors"].append({"url": url, "error": str(exc), "type": type(exc).__name__})
+            logger.warning("FAILED listing page %s: %s", url, exc)
+            break
+        summary["listing_pages_fetched"] += 1
+        meetings.extend(parse_pmg_api_meetings(payload))
+        if len(meetings) >= limit or not payload.get("next"):
+            break
+        time.sleep(sleep)
+
+    if from_date:
+        meetings = [m for m in meetings if m["date"] and m["date"] >= from_date]
+    if to_date:
+        meetings = [m for m in meetings if m["date"] and m["date"] <= to_date]
+    meetings = meetings[:limit]
+
+    if db is None and not dry_run:
+        raise ValueError("db session required for real runs")
 
     from sqlalchemy import select
 
     from app.models.vote_event import VoteEvent
     from app.services.accountability_service import upsert_vote_event
 
-    index_html = fetch(_PMG_VOTES_URL)
-    summary["pages_fetched"] += 1
-    vote_urls = parse_pmg_votes_index(index_html)
-    summary["urls_discovered"] = len(vote_urls)
-    logger.info("Found %d vote URLs; processing up to %d", len(vote_urls), limit)
-
-    for url in vote_urls[:limit]:
-        if summary["pages_fetched"] >= max_pages + 1:  # +1 for the index page
-            logger.info("max-pages limit (%d) reached, stopping.", max_pages)
-            break
+    for meeting in meetings:
         try:
-            html = fetch(url)
-            summary["pages_fetched"] += 1
-            event_data = parse_pmg_vote_event(html, source_url=url)
+            detail = _fetch_json(fetch, meeting_detail_api_url(meeting["api_id"]))
+            summary["detail_pages_fetched"] += 1
+            summary["meetings_scanned"] += 1
+            event_data = build_vote_event_from_meeting(detail)
             if not event_data:
-                logger.warning("SKIP %s (no data parsed)", url)
                 continue
+            summary["vote_events_found"] += 1
+            if not event_data["vote_records"]:
+                summary["outcome_only_events"] += 1
+
             if dry_run:
                 logger.info(
-                    "dry-run: would upsert vote event %r (%d records, not written).",
-                    event_data["title"][:80], len(event_data["vote_records"]),
+                    "dry-run: would upsert vote event %r (result=%s, %d aggregate records, not written)",
+                    event_data["title"][:70], event_data["result"], len(event_data["vote_records"]),
                 )
                 summary["processed"] += 1
+                summary["vote_records"] += len(event_data["vote_records"])
                 continue
-            existing = db.scalar(select(VoteEvent).where(VoteEvent.source_url == url))
+
+            existing = db.scalar(select(VoteEvent).where(VoteEvent.source_url == event_data["source_url"]))
             upsert_vote_event(db, event_data)
             db.commit()
             summary["processed"] += 1
+            summary["vote_records"] += len(event_data["vote_records"])
             if existing:
                 summary["updated"] += 1
             else:
@@ -108,43 +157,51 @@ def run_votes_ingest(
             if not dry_run:
                 db.rollback()
             summary["failed"] += 1
-            summary["errors"].append({"url": url, "error": str(exc), "type": type(exc).__name__})
-            logger.warning("FAILED %s: %s", url, exc)
+            summary["errors"].append(
+                {"url": meeting.get("source_url") or "", "error": str(exc), "type": type(exc).__name__}
+            )
+            logger.warning("FAILED %s: %s", meeting.get("source_url"), exc)
         time.sleep(sleep)
 
     return summary
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Bounded PMG vote events ingestion.")
-    parser.add_argument("--limit", type=int, default=20, help="Max vote events to upsert.")
-    parser.add_argument("--max-pages", type=int, default=20, help="Max individual vote pages to fetch.")
+    parser = argparse.ArgumentParser(description="Bounded PMG vote/division detection from meeting minutes.")
+    parser.add_argument("--limit", type=int, default=20, help="Max meetings to detail-scan.")
+    parser.add_argument("--max-pages", type=int, default=2, help="Max listing API pages to fetch (50 meetings/page).")
+    parser.add_argument("--start-page", type=int, default=0, help="Listing page to start from (0 = newest; minutes are published with a lag, so vote signals live on older pages).")
     parser.add_argument("--sleep", type=float, default=0.5, help="Seconds between requests.")
+    parser.add_argument("--from-date", default=None, help="Only meetings on/after this date (YYYY-MM-DD).")
+    parser.add_argument("--to-date", default=None, help="Only meetings on/before this date (YYYY-MM-DD).")
     parser.add_argument("--dry-run", action="store_true", help="No DB writes; offline unless --discover.")
     parser.add_argument("--discover", action="store_true", help="Allow live fetches during --dry-run.")
+    parser.add_argument("--json-output", action="store_true", help="Print the summary as JSON.")
     args = parser.parse_args()
 
-    if args.dry_run and not args.discover:
-        # No DB needed for the offline plan.
-        run_votes_ingest(None, limit=args.limit, max_pages=args.max_pages, sleep=args.sleep, dry_run=True, discover=False)
-        return
+    from_date = date.fromisoformat(args.from_date) if args.from_date else None
+    to_date = date.fromisoformat(args.to_date) if args.to_date else None
 
-    from app.db import SessionLocal
-    from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
+    kwargs = dict(
+        limit=args.limit,
+        max_pages=args.max_pages,
+        start_page=args.start_page,
+        sleep=args.sleep,
+        from_date=from_date,
+        to_date=to_date,
+        dry_run=args.dry_run,
+        discover=args.discover,
+    )
 
-    with SessionLocal() as db:
-        run = None
-        if not args.dry_run:
+    if args.dry_run:
+        summary = run_votes_ingest(None, **kwargs)
+    else:
+        from app.db import SessionLocal
+        from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
+
+        with SessionLocal() as db:
             run = start_ingestion_run(db, "PMG", "votes_ingest", args.limit)
-        summary = run_votes_ingest(
-            db,
-            limit=args.limit,
-            max_pages=args.max_pages,
-            sleep=args.sleep,
-            dry_run=args.dry_run,
-            discover=args.discover,
-        )
-        if run is not None:
+            summary = run_votes_ingest(db, **kwargs)
             finish_ingestion_run(
                 db,
                 run,
@@ -159,9 +216,12 @@ def main() -> None:
             )
             db.commit()
 
-    for key, value in summary.items():
-        if key != "errors":
-            print(f"{key}: {value}")
+    if args.json_output:
+        print(json.dumps(summary, default=str))
+    else:
+        for key, value in summary.items():
+            if key != "errors":
+                print(f"{key}: {value}")
 
 
 if __name__ == "__main__":
