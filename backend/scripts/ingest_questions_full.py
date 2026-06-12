@@ -30,6 +30,11 @@ def main() -> None:
     parser.add_argument("--to-date", default=None, help="End date (YYYY-MM-DD). Filters by year.")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Perform live discovery during --dry-run (off by default so dry runs are fast).",
+    )
     parser.add_argument("--sleep", type=float, default=0.5)
     args = parser.parse_args()
 
@@ -38,16 +43,21 @@ def main() -> None:
     years = _years_in_range(from_date, to_date)
 
     existing_urls = _read_urls(Path(args.file))
-
-    print(f"discovering parliamentary question URLs for years: {years}")
     discovered: set[str] = set(existing_urls)
-    per_year_limit = max(args.limit or 500, 200)
-    for year in years:
-        year_urls = discover_parliamentary_question_urls(limit=per_year_limit, year=year)
-        print(f"  year {year}: {len(year_urls)} URLs discovered")
-        discovered.update(year_urls)
-        if args.limit and len(discovered) >= args.limit * 2:
-            break
+
+    if args.dry_run and not args.discover:
+        print("dry-run: skipping live discovery (pass --discover to enable).")
+    else:
+        print(f"discovering parliamentary question URLs for years: {years}")
+        # When a small --limit is set, keep per-year discovery proportional
+        # instead of inflating it to hundreds of listing-page requests.
+        per_year_limit = args.limit if args.limit else 500
+        for year in years:
+            year_urls = discover_parliamentary_question_urls(limit=per_year_limit, year=year)
+            print(f"  year {year}: {len(year_urls)} URLs discovered")
+            discovered.update(year_urls)
+            if args.limit and len(discovered) >= args.limit * 2:
+                break
 
     urls = sorted(discovered)
     if args.limit:

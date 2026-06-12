@@ -12,6 +12,7 @@ from app.ingestion.people_assembly import (
     normalize_people_assembly_url,
 )
 from app.main import app
+from app.models.committee import Committee
 from app.models.committee_membership import CommitteeMembership
 from app.models.politician_alias import PoliticianAlias
 from app.models.unresolved_entity import UnresolvedEntity
@@ -623,9 +624,10 @@ def test_committee_upsert_does_not_duplicate(monkeypatch):
     with SessionLocal() as db:
         ingest_people_assembly_committees(db, [url])
         ingest_people_assembly_committees(db, [url])
-    committees = client.get("/committees").json()
-    count = sum(1 for c in committees if "Dedup Testing" in c.get("name", ""))
-    assert count == 1, f"Expected 1 committee, got {count}"
+        # Count in the DB rather than via the paginated /committees endpoint:
+        # on a populated database the new committee may fall outside page 1.
+        committees = db.scalars(select(Committee).where(Committee.name.contains("Dedup Testing"))).all()
+    assert len(committees) == 1, f"Expected 1 committee, got {len(committees)}"
 
 
 # ---------------------------------------------------------------------------
