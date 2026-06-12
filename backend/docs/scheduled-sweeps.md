@@ -87,6 +87,42 @@ The workflow never prints `DATABASE_URL`.
   (the run report's "Next batch recommendation" tracks this).
 - The hard cap is 10 unless `--allow-large-batch` is passed deliberately.
 
+## Ingestion briefs
+
+After every sweep (and readiness run), `scripts/generate_ingestion_brief.py`
+condenses all run artifacts into one answer to "what changed / what matters /
+what needs attention": `ingestion_brief.md` + `ingestion_brief.json`, shown
+in the Actions step summary and included in the uploaded artifacts. This is
+the only thing you need to read — everything else is supporting detail.
+
+**Status colours** (deterministic rules, no AI):
+
+- 🟢 **green** — real run, exit 0, no failed stages or errors, every stream
+  advanced (or legitimately reached end of source). No human action needed.
+- 🟡 **yellow** — validation/dry-run only, no persistent DB, errors below the
+  red threshold, no new records despite advancing, or a partial advance.
+  Read the "Why" section; usually it just means the DATABASE_URL secret
+  isn't configured yet.
+- 🔴 **red** — failed stages, readiness failure, missing tables, ≥3 errors,
+  completeness FAILs, or a real run where no stream advanced. The
+  "Attention required" section says what to look at; cursors did not
+  advance for failed streams, so the next run retries the same window.
+
+**Next-action recommendations** are generated from the run data itself
+(missing secret → configure it; green at pages_per_run<6 → scale after two
+clean runs; errors → let the retained cursor retry; and so on). They are
+deliberately conservative.
+
+**Why vote_records can stay 0:** vote records are created only from explicit
+aggregate counts or named votes in source minutes. Many divisions report
+only the outcome ("agreed to"), which creates a VoteEvent with no records.
+The brief restates this so a 0 is never mistaken for a bug — fabricating
+records would be worse than missing them.
+
+This is what makes the operation automation-first: the system reports its
+own health, classifies it, and proposes the next step; humans only act on
+red (and optionally yellow) briefs.
+
 ## Reading artifacts
 
 Each run uploads `accountability-sweep-reports-<run number>` containing:
