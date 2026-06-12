@@ -17,6 +17,11 @@ on:
     # Daily incremental sweep. Delete or comment this block to disable.
     - cron: "30 2 * * *"
 
+permissions:
+  issues: write
+  contents: read
+  actions: read
+
 # Only one sweep at a time — a second run must wait, never overlap cursors.
 concurrency:
   group: accountability-sweep
@@ -112,6 +117,21 @@ jobs:
       - name: Generate ingestion brief
         if: always()
         run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
+
+      - name: Escalate red ingestion brief
+        if: always()
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ESCALATION_MODE="--dry-run"
+          if [ "$GITHUB_REF" = "refs/heads/main" ] && { [ "$GITHUB_EVENT_NAME" = "schedule" ] || [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; }; then
+            ESCALATION_MODE=""
+          fi
+          python scripts/escalate_ingestion_brief.py \
+            --brief-path reports/ingestion_brief.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --json-output \
+            $ESCALATION_MODE
 
       - name: Publish step summary
         if: always()

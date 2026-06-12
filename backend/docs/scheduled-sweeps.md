@@ -123,6 +123,20 @@ This is what makes the operation automation-first: the system reports its
 own health, classifies it, and proposes the next step; humans only act on
 red (and optionally yellow) briefs.
 
+### Red brief issue alerts
+
+The accountability workflow runs `scripts/escalate_ingestion_brief.py` after
+the brief is generated. A red brief creates or updates the open GitHub issue
+`Automated ingestion alert: red brief`; green and yellow briefs stay quiet.
+The issue uses the `automation`, `ingestion`, and `needs-attention` labels.
+Credentials, tokens, and `DATABASE_URL` values are redacted before issue
+content or command output is produced.
+
+Scheduled and manually dispatched runs on `main` may update GitHub. Branch
+validation uses `--dry-run` and never calls GitHub. To disable issue alerts,
+remove the `Escalate red ingestion brief` step from
+`.github/workflows/accountability-sweep.yml`.
+
 ## Reading artifacts
 
 Each run uploads `accountability-sweep-reports-<run number>` containing:
