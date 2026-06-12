@@ -109,13 +109,19 @@ jobs:
         if: always()
         run: python scripts/check_search_completeness.py || true
 
+      - name: Generate ingestion brief
+        if: always()
+        run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
+
       - name: Publish step summary
         if: always()
         run: |
-          if [ -f reports/accountability_sweep_report.md ]; then
+          if [ -f reports/ingestion_brief.md ]; then
+            cat reports/ingestion_brief.md >> "$GITHUB_STEP_SUMMARY"
+          elif [ -f reports/accountability_sweep_report.md ]; then
             cat reports/accountability_sweep_report.md >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No sweep report was generated." >> "$GITHUB_STEP_SUMMARY"
+            echo "No sweep report or brief was generated." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload run reports as artifacts

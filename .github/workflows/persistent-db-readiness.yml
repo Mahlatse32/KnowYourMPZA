@@ -96,6 +96,10 @@ jobs:
           fi
           echo "Readiness exit code: $CODE"
 
+      - name: Generate readiness-only ingestion brief
+        if: always() && steps.secret.outputs.present == 'true'
+        run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
+
       - name: Upload readiness artifacts
         if: always() && steps.secret.outputs.present == 'true'
         uses: actions/upload-artifact@v4
