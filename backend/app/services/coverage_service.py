@@ -404,6 +404,7 @@ def generate_full_coverage_report(db: Session) -> dict:
         },
         "latest_ingestion_runs": latest_runs,
         "latest_ingestion_errors": latest_errors,
+        "accountability_sweep": _sweep_section(db, total_committee_meetings),
         "accountability_coverage": {
             "bills_total": total_bills,
             "bills_with_source_url_pct": _pct(bills_with_source, total_bills),
@@ -419,6 +420,22 @@ def generate_full_coverage_report(db: Session) -> dict:
             "attendance_resolved_pct": _pct(resolved_attendance, total_attendance),
         },
         "recommendations": recommendations,
+    }
+
+
+def _sweep_section(db: Session, meetings_ingested: int) -> dict:
+    """Incremental sweep progress per stream. PMG's total meeting count comes
+    from API listing metadata captured during sweeps (source_total)."""
+    from app.services.sweep_service import list_sweep_states, sweep_state_as_dict
+
+    states = {s.stream_name: s for s in list_sweep_states(db)}
+    meetings_state = states.get("pmg_committee_meetings")
+    pmg_meetings_total = meetings_state.source_total if meetings_state else None
+    return {
+        "streams": [sweep_state_as_dict(s) for s in states.values()],
+        "pmg_committee_meetings_total": pmg_meetings_total,
+        "committee_meetings_ingested": meetings_ingested,
+        "estimated_meeting_coverage_percent": _pct(meetings_ingested, pmg_meetings_total or 0),
     }
 
 

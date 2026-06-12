@@ -41,11 +41,15 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
+_BATCH_SIZE = 50  # bills per sweep "page" (offset cursor unit)
+
+
 def run_backfill(
     db: Session,
     *,
     limit: int = 50,
     max_pages: int = 20,
+    offset: int = 0,
     sleep: float = 0.5,
     dry_run: bool = False,
     discover: bool = False,
@@ -55,14 +59,25 @@ def run_backfill(
 
     Returns a summary dict. Never writes to the DB when dry_run is True.
     Never touches the network when dry_run is True and discover is False.
+    The offset cursor walks bills in a stable id order so sweeps cover the
+    whole table across runs.
     """
     bills = list(
         db.scalars(
-            select(Bill).where(Bill.source_url.is_not(None)).order_by(Bill.year.desc().nullslast()).limit(limit)
+            select(Bill)
+            .where(Bill.source_url.is_not(None))
+            .order_by(Bill.created_at, Bill.id)
+            .offset(offset)
+            .limit(limit)
         )
     )
     summary = {
+        "offset": offset,
         "bills_selected": len(bills),
+        # end of the bills table reached: fewer rows than requested
+        "end_reached": len(bills) < limit,
+        "pages_attempted": max(1, -(-len(bills) // _BATCH_SIZE)) if bills else 1,
+        "errors": [],
         "pages_fetched": 0,
         "events_parsed": 0,
         "events_created": 0,
@@ -125,6 +140,7 @@ def run_backfill(
             if not dry_run:
                 db.rollback()
             summary["failed"] += 1
+            summary["errors"].append({"url": bill.source_url or "", "error": str(exc), "type": type(exc).__name__})
             logger.warning("FAILED %s: %s", bill.source_url, exc)
         time.sleep(sleep)
 
@@ -132,32 +148,40 @@ def run_backfill(
 
 
 def main() -> None:
+    from ingest_bills import add_sweep_args, execute_with_optional_sweep, print_summary
+
     parser = argparse.ArgumentParser(description="Backfill bill lifecycle events from bill source pages.")
     parser.add_argument("--limit", type=int, default=50, help="Max bills to process.")
     parser.add_argument("--max-pages", type=int, default=20, help="Max pages to fetch.")
+    parser.add_argument("--start-page", type=int, default=0, help="Offset batch (x50 bills) to start from (direct mode).")
     parser.add_argument("--sleep", type=float, default=0.5, help="Seconds between requests.")
     parser.add_argument("--dry-run", action="store_true", help="No DB writes; offline unless --discover.")
     parser.add_argument("--discover", action="store_true", help="Allow live fetches during --dry-run.")
+    parser.add_argument("--json-output", action="store_true", help="Print the summary as JSON.")
+    add_sweep_args(parser)
     args = parser.parse_args()
 
-    from app.db import SessionLocal
-
     try:
-        with SessionLocal() as db:
-            summary = run_backfill(
+        summary = execute_with_optional_sweep(
+            args,
+            stream_name="pmg_bill_lifecycle_backfill",
+            run_core=lambda db, start_page, max_pages: run_backfill(
                 db,
-                limit=args.limit,
-                max_pages=args.max_pages,
+                limit=args.limit if not args.sweep else max_pages * _BATCH_SIZE,
+                max_pages=args.max_pages if not args.sweep else max_pages * _BATCH_SIZE,
+                offset=start_page * _BATCH_SIZE,
                 sleep=args.sleep,
                 dry_run=args.dry_run,
                 discover=args.discover,
-            )
+            ),
+            run_type="bill_lifecycle_backfill",
+            needs_db_for_dry_run=True,
+        )
     except Exception as exc:
         logger.warning("SKIP: database not reachable (%s). Nothing done.", exc)
         sys.exit(0 if args.dry_run else 1)
 
-    for key, value in summary.items():
-        print(f"{key}: {value}")
+    print_summary(summary, json_output=args.json_output)
 
 
 if __name__ == "__main__":
