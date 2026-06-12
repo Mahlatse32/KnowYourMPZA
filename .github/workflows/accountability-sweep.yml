@@ -1,0 +1,119 @@
+name: Accountability sweep
+
+on:
+  workflow_dispatch:
+    inputs:
+      pages_per_run:
+        description: "Bounded page window per stream (safety cap 10)"
+        required: false
+        default: "3"
+      dry_run:
+        description: "Validation mode: no writes, no sweep advancement"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+  schedule:
+    # Daily incremental sweep. Delete or comment this block to disable.
+    - cron: "30 2 * * *"
+
+# Only one sweep at a time — a second run must wait, never overlap cursors.
+concurrency:
+  group: accountability-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      # Ephemeral fallback database. Used ONLY for validation/dry-run mode —
+      # run_scheduled_sweep.py refuses real sweeps against it because sweep
+      # state would not persist between runs.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: knowyourmpza
+          POSTGRES_PASSWORD: knowyourmpza
+          POSTGRES_DB: knowyourmpza
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knowyourmpza -d knowyourmpza"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ENVIRONMENT: development
+      PAGES_PER_RUN: ${{ github.event.inputs.pages_per_run || '3' }}
+      INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+      # Never echo DATABASE_URL — it may contain credentials.
+      PERSISTENT_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Select database mode
+        id: mode
+        run: |
+          if [ -n "$PERSISTENT_DATABASE_URL" ]; then
+            echo "Persistent DATABASE_URL secret is configured — real sweep mode available."
+            echo "DATABASE_URL=$PERSISTENT_DATABASE_URL" >> "$GITHUB_ENV"
+            echo "SWEEP_DB_PERSISTENT=true" >> "$GITHUB_ENV"
+            echo "dry_run=$INPUT_DRY_RUN" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::No DATABASE_URL secret configured — falling back to ephemeral Postgres in VALIDATION (dry-run) mode. Sweep state will NOT persist. Add the DATABASE_URL secret to enable real scheduled sweeps."
+            echo "DATABASE_URL=postgresql+psycopg://knowyourmpza:knowyourmpza@localhost:5432/knowyourmpza" >> "$GITHUB_ENV"
+            echo "SWEEP_DB_PERSISTENT=false" >> "$GITHUB_ENV"
+            echo "dry_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run migrations
+        run: alembic upgrade head
+
+      - name: Run accountability sweep
+        run: |
+          DRY_FLAG=""
+          if [ "${{ steps.mode.outputs.dry_run }}" = "true" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+          python scripts/run_scheduled_sweep.py --pages-per-run "$PAGES_PER_RUN" --sleep 0.5 $DRY_FLAG
+
+      - name: Inspect database and sweep state
+        if: always()
+        run: python scripts/inspect_db.py --samples 3 --show-sweep-state --json-output > reports/inspect_db.json || true
+
+      - name: Coverage report
+        if: always()
+        run: python scripts/report_full_coverage.py --json-only || true
+
+      - name: Search completeness checks
+        if: always()
+        run: python scripts/check_search_completeness.py || true
+
+      - name: Publish step summary
+        if: always()
+        run: |
+          if [ -f reports/accountability_sweep_report.md ]; then
+            cat reports/accountability_sweep_report.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No sweep report was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload run reports as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: accountability-sweep-reports-${{ github.run_number }}
+          path: backend/reports/
+          if-no-files-found: warn
+          retention-days: 30

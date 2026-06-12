@@ -108,6 +108,7 @@ def main() -> None:
     parser.add_argument("--skip-bill-lifecycle-sweep", action="store_true")
     parser.add_argument("--skip-committee-meeting-sweep", action="store_true")
     parser.add_argument("--skip-vote-sweep", action="store_true")
+    parser.add_argument("--json-output", action="store_true", help="Also print the stage results as one JSON line.")
     args = parser.parse_args()
 
     if args.accountability_sweep and not args.skip_accountability_sweep:
@@ -120,7 +121,11 @@ def main() -> None:
         failed = [k for k, v in results.items() if not v]
         if failed:
             print(f"\n{len(failed)} sweep stage(s) reported failures — cursors did not advance for failed streams.")
-        return
+        if args.json_output:
+            import json as _json
+
+            print(_json.dumps({"accountability_sweep_stages": results, "failed_stage_count": len(failed)}))
+        sys.exit(1 if failed else 0)
 
     sleep_args = ["--sleep", str(args.sleep)]
     date_args = []

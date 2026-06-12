@@ -34,15 +34,47 @@ INSPECT_MODELS = [
 ]
 
 
+def build_inspect_payload(db, samples: int = 2, include_sweep: bool = True) -> dict:
+    """Machine-readable inspection payload: table counts, sample rows
+    (id/title/name/status/source_url columns only), and sweep states."""
+    payload: dict = {"tables": {}, "sweep_states": []}
+    for model in INSPECT_MODELS:
+        count = db.scalar(select(func.count()).select_from(model)) or 0
+        rows = []
+        if count and samples:
+            for row in db.scalars(select(model).limit(samples)):
+                rows.append(
+                    {
+                        c.name: str(getattr(row, c.name, ""))[:120]
+                        for c in model.__table__.columns
+                        if c.name in ("id", "title", "full_name", "name", "status", "source_url")
+                    }
+                )
+        payload["tables"][model.__tablename__] = {"count": count, "samples": rows}
+    if include_sweep:
+        from app.services.sweep_service import list_sweep_states, sweep_state_as_dict
+
+        payload["sweep_states"] = [sweep_state_as_dict(s) for s in list_sweep_states(db)]
+    return payload
+
+
 def main() -> None:
+    import json
+
     parser = argparse.ArgumentParser(description="Inspect database contents (read-only).")
     parser.add_argument("--samples", type=int, default=2, help="Sample rows to print per table.")
     parser.add_argument("--show-sweep-state", action="store_true", help="Also print incremental sweep states.")
+    parser.add_argument("--json-output", action="store_true", help="Print the inspection payload as JSON.")
     args = parser.parse_args()
 
     from app.db import SessionLocal
 
     try:
+        if args.json_output:
+            with SessionLocal() as db:
+                payload = build_inspect_payload(db, samples=args.samples, include_sweep=True)
+            print(json.dumps(payload, default=str))
+            return
         with SessionLocal() as db:
             for model in INSPECT_MODELS:
                 count = db.scalar(select(func.count()).select_from(model)) or 0
