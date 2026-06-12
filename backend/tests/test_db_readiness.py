@@ -218,10 +218,28 @@ def test_readiness_workflow_uploads_artifacts():
     assert "backend/reports/" in text
 
 
+def test_readiness_workflow_creates_reports_directory_before_stdout_redirect():
+    text = READINESS_WF.read_text(encoding="utf-8")
+    mkdir = text.find("mkdir -p reports")
+    redirect = text.find("> reports/db_readiness_stdout.json")
+    assert mkdir != -1, "readiness workflow must create backend/reports"
+    assert redirect != -1, "readiness workflow stdout report redirect is missing"
+    assert mkdir < redirect, "reports directory must exist before redirecting readiness stdout"
+
+
 def test_readiness_workflow_handles_missing_secret():
     text = READINESS_WF.read_text(encoding="utf-8")
     assert "NOT enabled" in text
     assert "GITHUB_STEP_SUMMARY" in text
+
+
+def test_sweep_workflow_creates_reports_directory_before_report_writes():
+    text = SWEEP_WF.read_text(encoding="utf-8")
+    mkdir = text.find("mkdir -p reports")
+    first_report_write = text.find("> reports/inspect_db.json")
+    assert mkdir != -1, "sweep workflow must create backend/reports"
+    assert first_report_write != -1, "sweep workflow report redirect is missing"
+    assert mkdir < first_report_write, "reports directory must exist before sweep report writes"
 
 
 def test_sweep_workflow_runs_readiness_preflight_before_real_sweeps():
