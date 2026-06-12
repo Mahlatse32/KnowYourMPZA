@@ -1,0 +1,106 @@
+name: Persistent DB readiness
+
+# On-demand only — run this to find out whether real scheduled sweeps are
+# enabled and what (if anything) is missing. Not scheduled by default.
+on:
+  workflow_dispatch:
+    inputs:
+      strict:
+        description: "Fail the job if the database is not ready"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      run_migrations:
+        description: "Apply alembic upgrade head if the DB is behind"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      check_sweep:
+        description: "Also verify sweep dry-run and the real-mode guard"
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+concurrency:
+  group: persistent-db-readiness
+  cancel-in-progress: false
+
+jobs:
+  readiness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: development
+      # Never echo this value — it may contain credentials.
+      PERSISTENT_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check whether the DATABASE_URL secret is configured
+        id: secret
+        run: |
+          if [ -n "$PERSISTENT_DATABASE_URL" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "# Persistent DB Readiness"
+              echo ""
+              echo "❌ **Real scheduled sweeps are NOT enabled.**"
+              echo ""
+              echo "The \`DATABASE_URL\` repository secret is not configured, so the"
+              echo "accountability sweep workflow runs in dry-run validation mode only"
+              echo "and sweep state does not persist between runs."
+              echo ""
+              echo "To enable real sweeps, add a \`DATABASE_URL\` secret pointing at a"
+              echo "persistent PostgreSQL database, then re-run this workflow."
+              echo "See \`backend/docs/persistent-db-runbook.md\`."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Run readiness checker
+        if: steps.secret.outputs.present == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          FLAGS="--json-output --write-report"
+          if [ "${{ github.event.inputs.run_migrations || 'true' }}" = "true" ]; then
+            FLAGS="$FLAGS --run-migrations"
+          fi
+          if [ "${{ github.event.inputs.check_sweep || 'true' }}" = "true" ]; then
+            FLAGS="$FLAGS --check-sweep"
+          fi
+          set +e
+          python scripts/check_persistent_db_ready.py $FLAGS > reports/db_readiness_stdout.json
+          CODE=$?
+          set -e
+          if [ -f reports/db_readiness.md ]; then
+            cat reports/db_readiness.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "$CODE" -ne 0 ] && [ "${{ github.event.inputs.strict || 'true' }}" = "true" ]; then
+            echo "Database is not ready (exit $CODE) and strict mode is enabled."
+            exit "$CODE"
+          fi
+          echo "Readiness exit code: $CODE"
+
+      - name: Upload readiness artifacts
+        if: always() && steps.secret.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: db-readiness-${{ github.run_number }}
+          path: backend/reports/
+          if-no-files-found: warn
+          retention-days: 30

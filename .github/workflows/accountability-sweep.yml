@@ -80,6 +80,15 @@ jobs:
       - name: Run migrations
         run: alembic upgrade head
 
+      - name: Preflight persistent DB readiness
+        # Real mode only: refuse to ingest against a database that is not
+        # ready. Validation (dry-run) mode skips this — its ephemeral DB is
+        # intentionally throwaway.
+        if: env.SWEEP_DB_PERSISTENT == 'true'
+        run: |
+          python scripts/check_persistent_db_ready.py --check-sweep --json-output --write-report
+          echo "Persistent DB readiness: OK"
+
       - name: Run accountability sweep
         run: |
           DRY_FLAG=""

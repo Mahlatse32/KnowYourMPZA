@@ -41,6 +41,27 @@ is marked persistent (`SWEEP_DB_PERSISTENT=true`, which the workflow sets
 automatically when the secret exists, or `--assume-persistent-db` on a host
 that owns its database).
 
+## Persistent DB readiness
+
+Before any **real** sweep, the workflow runs
+`scripts/check_persistent_db_ready.py --check-sweep` as a preflight: it
+connects, verifies the Alembic revision matches head, confirms all required
+tables (including `ingestion_sweep_states`) exist, exercises a sweep dry-run,
+and asserts the real-mode persistence guard is intact. If any check fails the
+job stops **before** ingestion and uploads `db_readiness.json`/`.md`
+artifacts explaining what's wrong. Validation (dry-run) mode skips the
+preflight — its ephemeral database is intentionally throwaway.
+
+You can also run readiness on demand via the **"Persistent DB readiness"**
+workflow (manual dispatch only; inputs: `strict`, `run_migrations`,
+`check_sweep`). Without the `DATABASE_URL` secret it writes a step summary
+stating that real scheduled sweeps are not enabled. The checker never prints
+the URL or password — secrets stay out of all logs by design. To test safely
+end-to-end, dispatch the sweep workflow with `dry_run=true`.
+
+For failure diagnosis and secret rotation, see
+[persistent-db-runbook.md](persistent-db-runbook.md).
+
 ## Required GitHub secret
 
 | Secret | Purpose |
