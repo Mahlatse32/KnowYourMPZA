@@ -9,6 +9,7 @@ from app.models.document import Document
 from app.models.document_mention import DocumentMention
 from app.models.ingestion_error import IngestionError
 from app.models.ingestion_run import IngestionRun
+from app.models.ingestion_sweep_state import IngestionSweepState
 from app.models.parliamentary_question import ParliamentaryQuestion
 from app.models.party import Party
 from app.models.politician import Politician
@@ -31,6 +32,7 @@ __all__ = [
     "DocumentMention",
     "IngestionError",
     "IngestionRun",
+    "IngestionSweepState",
     "ParliamentaryQuestion",
     "Party",
     "Politician",

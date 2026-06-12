@@ -49,6 +49,35 @@ def run_stage(label: str, script: str, extra_args: list[str], dry_run: bool) -> 
         return False
 
 
+# ---------------------------------------------------------------------------
+# Incremental accountability sweep orchestration
+# ---------------------------------------------------------------------------
+
+def build_accountability_sweep_stages(args) -> list[tuple[str, str, list[str]]]:
+    """Ordered, skippable sweep stages: bills -> bill lifecycle -> committee
+    meetings -> votes from minutes. Returns (label, script, extra_args)."""
+    common = ["--sweep", "--pages-per-run", str(args.pages_per_run), "--sleep", str(args.sleep), "--json-output"]
+    if getattr(args, "discover", False):
+        common = common + ["--discover"]
+    stages: list[tuple[str, str, list[str]]] = []
+    if not args.skip_bill_sweep:
+        stages.append(("Bills sweep (pmg_bills)", "ingest_bills.py", common))
+    if not args.skip_bill_lifecycle_sweep:
+        stages.append(("Bill lifecycle sweep (pmg_bill_lifecycle_backfill)", "backfill_legislative_history.py", common))
+    if not args.skip_committee_meeting_sweep:
+        stages.append(("Committee meetings sweep (pmg_committee_meetings)", "ingest_committee_activity.py", common))
+    if not args.skip_vote_sweep:
+        stages.append(("Votes sweep (pmg_votes_from_meetings)", "ingest_votes.py", common))
+    return stages
+
+
+def run_accountability_sweep(args) -> dict[str, bool]:
+    results: dict[str, bool] = {}
+    for label, script, extra in build_accountability_sweep_stages(args):
+        results[label] = run_stage(label, script, list(extra), args.dry_run)
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Full KnowYourMPZA data coverage pipeline.")
     parser.add_argument("--dry-run", action="store_true", help="Pass --dry-run to all stages.")
@@ -70,7 +99,28 @@ def main() -> None:
     parser.add_argument("--bills-limit", type=int, default=None)
     parser.add_argument("--votes-max-pages", type=int, default=20)
     parser.add_argument("--meetings-max-pages", type=int, default=20)
+    parser.add_argument("--accountability-sweep", action="store_true",
+                        help="Run the incremental accountability sweep stages (bills, lifecycle, meetings, votes) and exit.")
+    parser.add_argument("--pages-per-run", type=int, default=3, help="Bounded page window per sweep stream.")
+    parser.add_argument("--discover", action="store_true", help="With --dry-run: allow bounded live fetches in sweep stages.")
+    parser.add_argument("--skip-accountability-sweep", action="store_true")
+    parser.add_argument("--skip-bill-sweep", action="store_true")
+    parser.add_argument("--skip-bill-lifecycle-sweep", action="store_true")
+    parser.add_argument("--skip-committee-meeting-sweep", action="store_true")
+    parser.add_argument("--skip-vote-sweep", action="store_true")
     args = parser.parse_args()
+
+    if args.accountability_sweep and not args.skip_accountability_sweep:
+        results = run_accountability_sweep(args)
+        print(f"\n{'=' * 60}")
+        print("ACCOUNTABILITY SWEEP SUMMARY")
+        print(f"{'=' * 60}")
+        for stage, success in results.items():
+            print(f"  {stage}: {'OK' if success else 'FAILED'}")
+        failed = [k for k, v in results.items() if not v]
+        if failed:
+            print(f"\n{len(failed)} sweep stage(s) reported failures — cursors did not advance for failed streams.")
+        return
 
     sleep_args = ["--sleep", str(args.sleep)]
     date_args = []

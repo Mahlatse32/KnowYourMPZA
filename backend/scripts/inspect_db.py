@@ -37,6 +37,7 @@ INSPECT_MODELS = [
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect database contents (read-only).")
     parser.add_argument("--samples", type=int, default=2, help="Sample rows to print per table.")
+    parser.add_argument("--show-sweep-state", action="store_true", help="Also print incremental sweep states.")
     args = parser.parse_args()
 
     from app.db import SessionLocal
@@ -54,6 +55,28 @@ def main() -> None:
                             if c.name in ("id", "title", "full_name", "name", "status", "source_url")
                         }
                         print(f"  {cols}")
+            if args.show_sweep_state:
+                from app.services.sweep_service import list_sweep_states, sweep_state_as_dict
+
+                print("\n--- sweep states ---")
+                states = list_sweep_states(db)
+                if not states:
+                    print("(no sweep states yet)")
+                for state in states:
+                    info = sweep_state_as_dict(state)
+                    pct = None
+                    if info["source_total"] and state.stream_name == "pmg_committee_meetings":
+                        pct = round(info["next_page"] * 50 / info["source_total"] * 100, 2)
+                    print(
+                        f"{info['source_name']}/{info['stream_name']}: next_page={info['next_page']}"
+                        f" status={info['last_status']} completed_at={info['last_completed_at']}"
+                        f" totals(seen={info['total_seen']} created={info['total_created']}"
+                        f" updated={info['total_updated']} failed={info['total_failed']})"
+                        f" source_total={info['source_total']}"
+                        + (f" est_covered={pct}%" if pct is not None else "")
+                    )
+                    if info["last_error"]:
+                        print(f"  last_error: {info['last_error'][:160]}")
     except Exception as exc:
         print(f"SKIP: database not reachable ({exc}).")
         sys.exit(0)

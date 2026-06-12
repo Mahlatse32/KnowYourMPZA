@@ -70,6 +70,10 @@ def run_votes_ingest(
     when dry_run is True and discover is False.
     """
     summary = {
+        "start_page": start_page,
+        "pages_attempted": 0,
+        "end_reached": False,
+        "source_total": None,
         "listing_pages_fetched": 0,
         "detail_pages_fetched": 0,
         "meetings_scanned": 0,
@@ -104,8 +108,14 @@ def run_votes_ingest(
             logger.warning("FAILED listing page %s: %s", url, exc)
             break
         summary["listing_pages_fetched"] += 1
+        summary["pages_attempted"] += 1
+        if payload.get("count") is not None:
+            summary["source_total"] = payload["count"]
         meetings.extend(parse_pmg_api_meetings(payload))
-        if len(meetings) >= limit or not payload.get("next"):
+        if not payload.get("next"):
+            summary["end_reached"] = True
+            break
+        if len(meetings) >= limit:
             break
         time.sleep(sleep)
 
@@ -167,6 +177,8 @@ def run_votes_ingest(
 
 
 def main() -> None:
+    from ingest_bills import add_sweep_args, execute_with_optional_sweep, print_summary
+
     parser = argparse.ArgumentParser(description="Bounded PMG vote/division detection from meeting minutes.")
     parser.add_argument("--limit", type=int, default=20, help="Max meetings to detail-scan.")
     parser.add_argument("--max-pages", type=int, default=2, help="Max listing API pages to fetch (50 meetings/page).")
@@ -177,51 +189,29 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="No DB writes; offline unless --discover.")
     parser.add_argument("--discover", action="store_true", help="Allow live fetches during --dry-run.")
     parser.add_argument("--json-output", action="store_true", help="Print the summary as JSON.")
+    add_sweep_args(parser)
     args = parser.parse_args()
 
     from_date = date.fromisoformat(args.from_date) if args.from_date else None
     to_date = date.fromisoformat(args.to_date) if args.to_date else None
 
-    kwargs = dict(
-        limit=args.limit,
-        max_pages=args.max_pages,
-        start_page=args.start_page,
-        sleep=args.sleep,
-        from_date=from_date,
-        to_date=to_date,
-        dry_run=args.dry_run,
-        discover=args.discover,
+    summary = execute_with_optional_sweep(
+        args,
+        stream_name="pmg_votes_from_meetings",
+        run_core=lambda db, start_page, max_pages: run_votes_ingest(
+            db,
+            limit=args.limit if not args.sweep else max_pages * 50,
+            max_pages=max_pages,
+            start_page=start_page,
+            sleep=args.sleep,
+            from_date=from_date,
+            to_date=to_date,
+            dry_run=args.dry_run,
+            discover=args.discover,
+        ),
+        run_type="votes_ingest",
     )
-
-    if args.dry_run:
-        summary = run_votes_ingest(None, **kwargs)
-    else:
-        from app.db import SessionLocal
-        from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
-
-        with SessionLocal() as db:
-            run = start_ingestion_run(db, "PMG", "votes_ingest", args.limit)
-            summary = run_votes_ingest(db, **kwargs)
-            finish_ingestion_run(
-                db,
-                run,
-                {
-                    "processed_count": summary["processed"],
-                    "created_count": summary["created"],
-                    "updated_count": summary["updated"],
-                    "skipped_count": 0,
-                    "failed_count": summary["failed"],
-                    "errors": summary["errors"],
-                },
-            )
-            db.commit()
-
-    if args.json_output:
-        print(json.dumps(summary, default=str))
-    else:
-        for key, value in summary.items():
-            if key != "errors":
-                print(f"{key}: {value}")
+    print_summary(summary, json_output=args.json_output)
 
 
 if __name__ == "__main__":
