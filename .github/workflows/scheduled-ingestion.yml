@@ -19,6 +19,20 @@ jobs:
       SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
       MAX_DAILY_INGESTION_URLS: ${{ vars.MAX_DAILY_INGESTION_URLS || '50' }}
     steps:
+      - name: Validate scheduled ingestion configuration
+        run: |
+          case "${INGESTION_ENABLED,,}" in
+            1|true|yes) ;;
+            *)
+              echo "::error::Scheduled ingestion is disabled. Set the repository Actions secret INGESTION_ENABLED to true."
+              exit 1
+              ;;
+          esac
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::The repository Actions secret DATABASE_URL is not configured."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
@@ -39,6 +53,20 @@ jobs:
       SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
       MAX_WEEKLY_INGESTION_URLS: ${{ vars.MAX_WEEKLY_INGESTION_URLS || '100' }}
     steps:
+      - name: Validate scheduled ingestion configuration
+        run: |
+          case "${INGESTION_ENABLED,,}" in
+            1|true|yes) ;;
+            *)
+              echo "::error::Scheduled ingestion is disabled. Set the repository Actions secret INGESTION_ENABLED to true."
+              exit 1
+              ;;
+          esac
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::The repository Actions secret DATABASE_URL is not configured."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
