@@ -68,6 +68,17 @@ download formats, and evidence model still need technical validation.
 | Public Protector reports | https://www.pprotect.org/ | Chapter 9 oversight | Investigation reports, findings, remedial action | Candidate / not implemented | None | Required before implementation | On publication | Site accessibility and report indexing require validation; findings must link to report evidence, not media summaries | P1 |
 | SAHRC reports | https://www.sahrc.org.za/ | Chapter 9 oversight | Human-rights investigations, reports, findings | Candidate / not implemented | None | Required before implementation | On publication | Report taxonomy and named-entity sensitivity require review before ingestion | P2 |
 
+## Source discovery progress
+
+Discovery/audit scripts annotate official candidate sources (fetch status,
+format, granularity, parser readiness) and write reports under `reports/`.
+**Discovery/audit is not ingestion** — no records are created and no schema is
+added until a parser is validated and tested.
+
+| Candidate | Script | Report | Status |
+|---|---|---|---|
+| Parliamentary votes / divisions | `scripts/audit_votes_divisions_sources.py` (design: `docs/votes-divisions-ingestion-design.md`) | `reports/votes_divisions_source_audit.json` / `.md` | Audit + design only — PMG minutes implemented (limited); no MP-level expansion yet |
+
 ## Priority scoring
 
 Backlog priority is assigned from five review dimensions, each scored 1-5:
