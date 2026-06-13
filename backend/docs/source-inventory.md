@@ -78,6 +78,7 @@ added until a parser is validated and tested.
 | Candidate | Discovery script | Report | Status |
 |---|---|---|---|
 | IEC election results | `scripts/discover_iec_sources.py` | `reports/iec_source_discovery.json` / `.md` | Discovery only — no results ingested, schema deferred |
+| Gazette / Acts / Bills metadata | `scripts/discover_gazette_acts_sources.py` (design: `docs/gazette-acts-bills-ingestion-design.md`) | `reports/gazette_acts_source_discovery.json` / `.md` | Discovery + design only — no gazettes/acts ingested |
 | Parliamentary votes / divisions | `scripts/audit_votes_divisions_sources.py` (design: `docs/votes-divisions-ingestion-design.md`) | `reports/votes_divisions_source_audit.json` / `.md` | Audit + design only — PMG minutes implemented (limited); no MP-level expansion yet |
 
 ## Priority scoring
