@@ -40,6 +40,9 @@ jobs:
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
       - run: python scripts/run_daily_ingestion.py
+      - name: Data coverage dashboard
+        if: always()
+        run: python scripts/report_data_coverage_dashboard.py || true
 
   weekly:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 4 * * 0'
@@ -74,3 +77,6 @@ jobs:
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
       - run: python scripts/run_weekly_ingestion.py
+      - name: Data coverage dashboard
+        if: always()
+        run: python scripts/report_data_coverage_dashboard.py || true
