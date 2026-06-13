@@ -8,7 +8,12 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.models.party import Party
 from app.models.politician import Politician
-from scripts.report_data_coverage_dashboard import build_report, render_markdown, write_report_files
+from scripts.report_data_coverage_dashboard import (
+    build_report,
+    collect_discovery_status,
+    render_markdown,
+    write_report_files,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -97,3 +102,30 @@ def test_workflows_run_dashboard_non_blocking():
 
     assert "python scripts/report_data_coverage_dashboard.py || true" in accountability
     assert scheduled.count("python scripts/report_data_coverage_dashboard.py || true") == 2
+
+
+def test_collect_discovery_status_none_and_missing(tmp_path):
+    assert collect_discovery_status(None) == []
+    assert collect_discovery_status(tmp_path / "does-not-exist") == []
+
+
+def test_collect_discovery_status_reads_discovery_reports(tmp_path):
+    (tmp_path / "iec_source_discovery.json").write_text(
+        json.dumps({"source": "IEC", "status": "discovery-only", "total_sources": 4, "reachable_count": 3,
+                    "sources": [1, 2, 3, 4]}),
+        encoding="utf-8",
+    )
+    statuses = collect_discovery_status(tmp_path)
+    assert len(statuses) == 1
+    assert statuses[0]["source"] == "IEC"
+    assert statuses[0]["sources_listed"] == 4
+    assert statuses[0]["ingested"] is False
+
+
+def test_dashboard_markdown_has_discovery_section():
+    session = _session()
+    try:
+        markdown = render_markdown(build_report(session))
+    finally:
+        session.close()
+    assert "## Source Discovery Status" in markdown
