@@ -143,6 +143,38 @@ schema to an ephemeral database, runs the metadata fixture in dry-run mode,
 generates the IEC coverage report, and uploads reports as an Actions artifact.
 It does not download IEC files and never invokes vote-total ingestion.
 
+### Reviewed-file ingestion workflow
+
+`.github/workflows/iec-reviewed-file-ingestion.yml` is **manual-dispatch only**
+(no schedule) and ingests vote totals from a **reviewed local file** against an
+existing manifest. It uses an **ephemeral** PostgreSQL service — never a
+persistent/production database — and **never downloads IEC files**.
+
+Inputs: `manifest_key`, `reviewed_file_path`, `dry_run` (default `true`),
+`upload_reports` (default `true`). The workflow **refuses** to run when:
+
+- `dry_run=false` and `reviewed_file_path` is empty,
+- `reviewed_file_path` is outside `tests/fixtures/iec/` or `data/iec/`,
+- `reviewed_file_path` contains `..`, or
+- the file does not exist.
+
+With no inputs it performs a dry-run validation against the committed fixture
+`tests/fixtures/iec/party_vote_totals.csv`. It never echoes `DATABASE_URL`.
+
+Operator flow for a real run:
+
+1. Save the reviewed official file locally under `data/iec/` (gitignored;
+   never commit it). Record its source URL and checksum.
+2. Confirm a matching manifest row exists (`manifest_key`); create it via
+   `scripts/ingest_iec_metadata_manifest.py` if needed.
+3. Dispatch with `dry_run=true` first; review the vote-totals and IEC coverage
+   report artifacts (row failures, vote sum, unresolved source identifiers,
+   `winners_ingested`/`office_bearers_ingested`/`internal_party_mapping_applied`
+   false flags).
+4. Only then dispatch with `dry_run=false`, the explicit `manifest_key`, and the
+   reviewed `reviewed_file_path`.
+5. Verify rows and coverage; do not commit the reviewed file or any reports.
+
 ### Next live step
 
 Before any bounded live workflow is proposed:
