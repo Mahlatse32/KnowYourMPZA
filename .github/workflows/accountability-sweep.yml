@@ -129,6 +129,10 @@ jobs:
         if: always()
         run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
 
+      - name: Triage ingestion alert
+        if: always()
+        run: python scripts/triage_ingestion_alert.py --reports-dir reports --write-report || true
+
       - name: Escalate red ingestion brief
         if: always()
         env:
