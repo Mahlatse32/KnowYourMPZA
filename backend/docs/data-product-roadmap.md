@@ -37,13 +37,16 @@ systematically without overreach.
   records only).
 - Parliament questions, replies, papers, and archive.
 - Parliament official member listings (cross-reference bridge, limited).
+- IEC election **metadata + source manifests** (`iec_elections`,
+  `iec_source_manifests`) via `scripts/ingest_iec_metadata_manifest.py` —
+  **metadata only; no vote totals, winners, office-bearers, or geography/party
+  mappings** (see `docs/iec-election-results-ingestion.md`).
 
 ## 3. Discovery-only areas (no ingestion yet)
 
 These have discovery/audit scripts and design docs, but **no ingestion and no
 schema**:
 
-- IEC election results — `scripts/discover_iec_sources.py`.
 - Government Gazette / Acts / Bills metadata —
   `scripts/discover_gazette_acts_sources.py` (+ design doc).
 - Municipal councils and office-bearers —
