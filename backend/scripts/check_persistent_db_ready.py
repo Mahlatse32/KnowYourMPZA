@@ -89,9 +89,13 @@ def default_db_probe(database_url: str) -> dict:
     """Connect and report revision + tables. Raises on connection failure."""
     from alembic.config import Config
     from alembic.script import ScriptDirectory
-    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy import inspect, text
 
-    engine = create_engine(database_url, pool_pre_ping=True)
+    from app.db_engine import create_app_engine
+
+    # Same PgBouncer-safe settings as the app so readiness can connect through
+    # the Supabase transaction pooler without DuplicatePreparedStatement.
+    engine = create_app_engine(database_url)
     with engine.connect() as conn:
         conn.execute(text("SELECT 1"))
         inspector = inspect(engine)

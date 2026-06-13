@@ -68,7 +68,11 @@ For failure diagnosis and secret rotation, see
 |---|---|
 | `DATABASE_URL` | SQLAlchemy URL of the persistent database, e.g. `postgresql+psycopg://user:pass@host:5432/knowyourmpza`. Without it the workflow runs validation-only. |
 
-The workflow never prints `DATABASE_URL`.
+The workflow never prints `DATABASE_URL`. Use the `postgresql+psycopg://`
+driver; the app disables psycopg prepared statements for that scheme
+(`prepare_threshold=None`) so connections through Supabase's transaction-mode
+pooler (PgBouncer) do not raise `DuplicatePreparedStatement`. See
+[persistent-db-runbook.md](persistent-db-runbook.md#pgbouncer--supabase-transaction-pooler-and-prepared-statements).
 
 ## Safety guards
 
