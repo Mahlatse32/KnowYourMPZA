@@ -93,6 +93,9 @@ schema**:
    before adding larger datasets.
 3. IEC coverage/quality reporting, then a reviewed operator run against an
    official file whose manifest and checksum are already stored (#24).
+   The reconciliation phase after that is an **explicit source-identifier
+   registry** (exact official IDs only — never fuzzy matching), informed by
+   `scripts/report_iec_unresolved_identifiers.py`.
 4. Votes / divisions audit → bounded expansion only where explicit (#7).
 5. Gazette / Acts discovery → bill↔act linkage on explicit identifiers (#25).
 6. Municipal discovery → councils/office-bearers with confirmed terms (#26).
