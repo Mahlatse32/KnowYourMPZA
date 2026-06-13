@@ -77,6 +77,7 @@ validated and tested.
 
 | Candidate | Discovery script | Report | Status |
 |---|---|---|---|
+| IEC election results | `scripts/discover_iec_sources.py` | `reports/iec_source_discovery.json` / `.md` | Discovery only — no results ingested, schema deferred |
 | Municipal councils & office-bearers | `scripts/discover_municipal_sources.py` (design: `docs/municipal-councils-ingestion-design.md`) | `reports/municipal_source_discovery.json` / `.md` | Discovery + design only — no councils/office-bearers ingested |
 
 ## Priority scoring
