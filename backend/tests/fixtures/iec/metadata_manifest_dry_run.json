@@ -1,0 +1,21 @@
+{
+  "sources": [
+    {
+      "url": "https://results.elections.org.za/home/",
+      "election_type": "all",
+      "year": null,
+      "geography_level": "national/provincial/municipal",
+      "notes": "Offline workflow validation fixture; no result rows."
+    }
+  ],
+  "responses": [
+    {
+      "url": "https://results.elections.org.za/home/",
+      "status": 200,
+      "content_type": "text/html",
+      "ok": true,
+      "body": "<html><title>IEC results portal fixture</title></html>",
+      "revision_hint": "offline-test-fixture"
+    }
+  ]
+}
