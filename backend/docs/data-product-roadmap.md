@@ -27,6 +27,10 @@ systematically without overreach.
 - **Source inventory** (`docs/source-inventory.md`) — living register of
   implemented vs candidate sources.
 
+- **IEC coverage report** (`scripts/report_iec_coverage.py`) - manifest and
+  vote-total integrity, unresolved source identifiers, and conservative
+  red/yellow/green readiness without winner or office-holder inference.
+
 ## 2. Currently implemented data sources
 
 - People's Assembly member profiles and committee pages.

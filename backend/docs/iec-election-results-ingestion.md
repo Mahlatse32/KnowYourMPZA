@@ -102,6 +102,13 @@ Run `alembic upgrade head`.
 
 ## Next step
 
-Add a dedicated IEC coverage and quality report for manifest coverage, row
-failures, source identifier completeness, and unresolved source actors.
-Review that report before enabling any live ingestion path.
+Run the dedicated coverage and quality report:
+
+```bash
+python scripts/report_iec_coverage.py
+```
+
+It writes `reports/iec_coverage_report.{json,md}` and reports manifest
+coverage, orphaned rows, evidence gaps, unresolved source identifiers, and a
+conservative red/yellow/green public-readiness status. Review it before
+enabling any live ingestion path.
