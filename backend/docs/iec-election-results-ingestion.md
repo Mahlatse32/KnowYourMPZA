@@ -155,6 +155,38 @@ Before any bounded live workflow is proposed:
 5. Design a bounded, explicit-file workflow with per-file failure capture and
    no source discovery guesswork.
 
+## Controlled live download audit
+
+Before proposing any live ingestion path, audit official IEC downloads with
+`scripts/audit_iec_live_downloads.py`. It performs **bounded, safe** HEAD/GET
+inspection only — it writes no database rows, ingests no vote totals, commits
+no downloaded files, and never prints secrets.
+
+```bash
+# offline validation (tests use this; no network)
+python scripts/audit_iec_live_downloads.py \
+  --offline-fixture tests/fixtures/iec/live_download_audit.json
+
+# reviewed official URL(s)
+python scripts/audit_iec_live_downloads.py \
+  --url "https://results.elections.org.za/<reviewed-structured-file>" \
+  --max-bytes 1000000
+```
+
+Safety constraints:
+
+- Official IEC domains only (`elections.org.za`); off-domain URLs and any
+  redirect that lands off-domain are rejected as failures, never followed.
+- At most `--max-bytes` of the body are read; larger responses are sampled and
+  flagged `oversize` / unsafe for a full fetch.
+- Allowed content types only; others are risk-flagged.
+- A CSV is `structured-candidate` only when its header carries an explicit vote
+  column plus source contest and party/candidate identifiers.
+
+It writes `reports/iec_live_download_audit.{json,md}` (gitignored). Per-URL
+failures are captured; if every URL fails the run exits non-zero. This audit is
+a prerequisite review step, not an ingestion step.
+
 ## Structured format audit
 
 Run the structured format audit before parsing a result file:
