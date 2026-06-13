@@ -54,6 +54,10 @@ jobs:
         if: always()
         run: python scripts/dataset_report.py || true
 
+      - name: Data coverage dashboard
+        if: always()
+        run: python scripts/report_data_coverage_dashboard.py || true
+
       - name: Generate ingestion brief
         if: always()
         run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
@@ -65,7 +69,7 @@ jobs:
             cat reports/ingestion_brief.md >> "$GITHUB_STEP_SUMMARY"
           else
             REPORT_FOUND=false
-            for report in reports/dataset_report.md reports/full_coverage_report.md reports/db_readiness.md; do
+            for report in reports/data_coverage_dashboard.md reports/dataset_report.md reports/full_coverage_report.md reports/db_readiness.md; do
               if [ -f "$report" ]; then
                 cat "$report" >> "$GITHUB_STEP_SUMMARY"
                 REPORT_FOUND=true
@@ -133,6 +137,10 @@ jobs:
         if: always()
         run: python scripts/dataset_report.py || true
 
+      - name: Data coverage dashboard
+        if: always()
+        run: python scripts/report_data_coverage_dashboard.py || true
+
       - name: Generate ingestion brief
         if: always()
         run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
@@ -144,7 +152,7 @@ jobs:
             cat reports/ingestion_brief.md >> "$GITHUB_STEP_SUMMARY"
           else
             REPORT_FOUND=false
-            for report in reports/dataset_report.md reports/full_coverage_report.md reports/db_readiness.md; do
+            for report in reports/data_coverage_dashboard.md reports/dataset_report.md reports/full_coverage_report.md reports/db_readiness.md; do
               if [ -f "$report" ]; then
                 cat "$report" >> "$GITHUB_STEP_SUMMARY"
                 REPORT_FOUND=true
