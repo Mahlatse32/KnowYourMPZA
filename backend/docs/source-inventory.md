@@ -70,15 +70,18 @@ download formats, and evidence model still need technical validation.
 
 ## Source discovery progress
 
-Discovery scripts annotate official candidate sources (fetch status, format,
-parser readiness) and write reports under `reports/`. **Discovery is not
-ingestion** — no records are created and no schema is added until a parser is
-validated and tested.
+Discovery/audit scripts annotate official candidate sources (fetch status,
+format, granularity, parser readiness) and write reports under `reports/`.
+**Discovery/audit is not ingestion** — no records are created and no schema is
+added until a parser is validated and tested.
 
 | Candidate | Discovery script | Report | Status |
 |---|---|---|---|
 | IEC election results | `scripts/discover_iec_sources.py` | `reports/iec_source_discovery.json` / `.md` | Discovery only — no results ingested, schema deferred |
 | Gazette / Acts / Bills metadata | `scripts/discover_gazette_acts_sources.py` (design: `docs/gazette-acts-bills-ingestion-design.md`) | `reports/gazette_acts_source_discovery.json` / `.md` | Discovery + design only — no gazettes/acts ingested |
+| Municipal councils & office-bearers | `scripts/discover_municipal_sources.py` (design: `docs/municipal-councils-ingestion-design.md`) | `reports/municipal_source_discovery.json` / `.md` | Discovery + design only — no councils/office-bearers ingested |
+| Chapter 9 institution reports | `scripts/discover_chapter9_report_sources.py` (design: `docs/chapter9-reports-ingestion-design.md`) | `reports/chapter9_source_discovery.json` / `.md` | Discovery + design only — no reports ingested, no findings extracted |
+| Parliamentary votes / divisions | `scripts/audit_votes_divisions_sources.py` (design: `docs/votes-divisions-ingestion-design.md`) | `reports/votes_divisions_source_audit.json` / `.md` | Audit + design only — PMG minutes implemented (limited); no MP-level expansion yet |
 
 ## Priority scoring
 
