@@ -179,6 +179,23 @@ It preserves the manifest checksum, source identifiers, raw row, and row
 checksum, while leaving source parties, candidates, and geographies unmapped.
 No live IEC download or scheduled vote-total ingestion is enabled.
 
+## Issue #24 status
+
+Issue #24 (Ingest IEC election results) remains **open** — the foundation is in
+place but full results ingestion is not complete.
+
+- **Completed:** source discovery, structured-format audit, metadata/source
+  manifests, one audited CSV vote-totals parser foundation, coverage quality
+  report, and a manual dry-run workflow.
+- **Pending review:** controlled live-download audit, reviewed-file ingestion
+  workflow, and an unresolved source-identifiers report (open PRs).
+- **Remaining:** one controlled reviewed real-file ingestion into real vote
+  totals with coverage review; multiple official format parsers; historical
+  coverage; corrected/revised release handling; explicit source-identifier
+  registries and reconciliation. No winners, office-bearers, councillors, or
+  internal party/geography mappings are produced or planned without a separate,
+  source-backed design.
+
 ## Migrations
 
 - `0011_add_iec_metadata_manifest.py` adds election metadata and source
