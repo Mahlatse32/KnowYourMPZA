@@ -19,6 +19,8 @@ jobs:
       SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
       MAX_DAILY_INGESTION_URLS: ${{ vars.MAX_DAILY_INGESTION_URLS || '50' }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Validate scheduled ingestion configuration
         run: |
           case "${INGESTION_ENABLED,,}" in
@@ -33,16 +35,60 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
       - run: python scripts/run_daily_ingestion.py
+
+      - name: Inspect database
+        if: always()
+        run: python scripts/inspect_db.py --samples 3 --json-output > reports/inspect_db.json || true
+
+      - name: Generate dataset report
+        if: always()
+        run: python scripts/dataset_report.py || true
+
       - name: Data coverage dashboard
         if: always()
         run: python scripts/report_data_coverage_dashboard.py || true
+
+      - name: Generate ingestion brief
+        if: always()
+        run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
+
+      - name: Publish scheduled ingestion summary
+        if: always()
+        run: |
+          if [ -f reports/ingestion_brief.md ]; then
+            cat reports/ingestion_brief.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            REPORT_FOUND=false
+            for report in reports/data_coverage_dashboard.md reports/dataset_report.md reports/full_coverage_report.md reports/db_readiness.md; do
+              if [ -f "$report" ]; then
+                cat "$report" >> "$GITHUB_STEP_SUMMARY"
+                REPORT_FOUND=true
+                break
+              fi
+            done
+            if [ "$REPORT_FOUND" = "false" ]; then
+              echo "No scheduled ingestion report was generated." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload daily ingestion reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-ingestion-daily-reports-${{ github.run_number }}
+          path: backend/reports/
+          if-no-files-found: warn
+          retention-days: 30
 
   weekly:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 4 * * 0'
@@ -56,6 +102,8 @@ jobs:
       SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
       MAX_WEEKLY_INGESTION_URLS: ${{ vars.MAX_WEEKLY_INGESTION_URLS || '100' }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Validate scheduled ingestion configuration
         run: |
           case "${INGESTION_ENABLED,,}" in
@@ -70,13 +118,57 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
       - run: python scripts/run_weekly_ingestion.py
+
+      - name: Inspect database
+        if: always()
+        run: python scripts/inspect_db.py --samples 3 --json-output > reports/inspect_db.json || true
+
+      - name: Generate dataset report
+        if: always()
+        run: python scripts/dataset_report.py || true
+
       - name: Data coverage dashboard
         if: always()
         run: python scripts/report_data_coverage_dashboard.py || true
+
+      - name: Generate ingestion brief
+        if: always()
+        run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
+
+      - name: Publish scheduled ingestion summary
+        if: always()
+        run: |
+          if [ -f reports/ingestion_brief.md ]; then
+            cat reports/ingestion_brief.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            REPORT_FOUND=false
+            for report in reports/data_coverage_dashboard.md reports/dataset_report.md reports/full_coverage_report.md reports/db_readiness.md; do
+              if [ -f "$report" ]; then
+                cat "$report" >> "$GITHUB_STEP_SUMMARY"
+                REPORT_FOUND=true
+                break
+              fi
+            done
+            if [ "$REPORT_FOUND" = "false" ]; then
+              echo "No scheduled ingestion report was generated." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+      - name: Upload weekly ingestion reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scheduled-ingestion-weekly-reports-${{ github.run_number }}
+          path: backend/reports/
+          if-no-files-found: warn
+          retention-days: 30
