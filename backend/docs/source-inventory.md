@@ -77,6 +77,7 @@ validated and tested.
 
 | Candidate | Discovery script | Report | Status |
 |---|---|---|---|
+| IEC election results | `scripts/discover_iec_sources.py` | `reports/iec_source_discovery.json` / `.md` | Discovery only — no results ingested, schema deferred |
 | Chapter 9 institution reports | `scripts/discover_chapter9_report_sources.py` (design: `docs/chapter9-reports-ingestion-design.md`) | `reports/chapter9_source_discovery.json` / `.md` | Discovery + design only — no reports ingested, no findings extracted |
 
 ## Priority scoring
