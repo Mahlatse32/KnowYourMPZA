@@ -43,11 +43,35 @@ The checker never prints credentials — output shows only
 | `connect` with `OperationalError ... Name or service not known` | Bad hostname | Verify the host in your provider's dashboard; check for typos |
 | `connect` with `password authentication failed` | Bad username/password | Re-copy credentials; rotate the secret (below) |
 | `connect` with `SSL required` / `no encryption` | Provider requires TLS | Append `?sslmode=require` to the URL |
+| Any query fails with `DuplicatePreparedStatement: prepared statement "_pgN_M" already exists` | Supabase transaction-mode pooler (PgBouncer) rotates server connections per transaction, so psycopg's prepared statements collide | Already mitigated: KnowYourMPZA disables psycopg prepared statements (`prepare_threshold=None`) for `postgresql+psycopg://` connections via `app/db_engine.py`. If it recurs, confirm the running workflow/deployment is on a commit that includes this fix and that `DATABASE_URL` points at the intended pooler/direct endpoint |
 | `alembic_revision` shows `current=none` | Fresh, never-migrated database | Re-run with `--run-migrations` (the readiness workflow does this by default) |
 | `migrations_current` fails | DB is on an older revision | `--run-migrations`, or investigate if the revision is *ahead* of the code (deployed from a newer branch?) |
 | `required_tables` reports missing tables | Partial migration or wrong database/schema | Confirm the URL points at the right database; `--run-migrations` |
 | `sweep_dry_run` fails | Script/regression problem, not DB | Check CI on main; run `pytest -q` |
 | `real_mode_guard` fails | The persistence guard was broken by a code change | Treat as a bug: real sweeps could run against ephemeral DBs. Fix before enabling schedules |
+
+## PgBouncer / Supabase transaction pooler and prepared statements
+
+Supabase's **transaction-mode** pooler (PgBouncer) hands each transaction a
+potentially different backend connection. psycopg prepares statements on the
+server by default, so a statement prepared on one backend is absent on the
+next and the pooler raises:
+
+```
+psycopg.errors.DuplicatePreparedStatement: prepared statement "_pg3_0" already exists
+```
+
+KnowYourMPZA disables psycopg prepared statements for every
+`postgresql+psycopg://` connection by passing `prepare_threshold=None`
+through the shared engine builder `app/db_engine.create_app_engine`, which is
+used by the application (`app/db.py`), Alembic migrations (`alembic/env.py`),
+and the readiness check (`scripts/check_persistent_db_ready.py`). Local
+development, direct connections, and SQLite test URLs are unaffected.
+
+The `DATABASE_URL` value is never printed in logs, docs, or workflows. If the
+error recurs after this fix, verify the running workflow/deployment is on a
+commit that includes it and that `DATABASE_URL` targets the intended
+pooler/direct endpoint.
 
 ## Rotating the DATABASE_URL secret
 

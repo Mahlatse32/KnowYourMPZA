@@ -75,8 +75,11 @@ schema**:
 
 ## 6. Recommended sequence
 
-1. Triage / resolve the red ingestion alert (#18) — fix the Supabase
-   transaction-pooler prepared-statement issue so real sweeps run clean.
+1. Triage / resolve the red ingestion alert (#18) — the Supabase
+   transaction-pooler prepared-statement issue is addressed by disabling
+   psycopg prepared statements (`prepare_threshold=None`) for
+   `postgresql+psycopg://` connections (`app/db_engine.py`). Recheck #18
+   after a real scheduled/accountability sweep runs green, then close it.
 2. Entity resolution reporting (#28) — improve unresolved-actor quality
    before adding larger datasets.
 3. IEC discovery → schema → bounded ingestion (#24).
