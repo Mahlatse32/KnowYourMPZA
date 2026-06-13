@@ -10,7 +10,7 @@ systematically without overreach.
 ## 1. Current capabilities
 
 - **Persistent database** (Supabase PostgreSQL) configured for scheduled runs.
-- **Alembic migrations** at head (`0010_add_ingestion_sweep_states`).
+- **Alembic migrations** at head (`0012_add_iec_vote_totals`).
 - **Scheduled ingestion** (`.github/workflows/scheduled-ingestion.yml`) — daily
   and weekly, secret-gated (`INGESTION_ENABLED`, `DATABASE_URL`).
 - **Accountability sweep** (`.github/workflows/accountability-sweep.yml`) —
@@ -37,10 +37,12 @@ systematically without overreach.
   records only).
 - Parliament questions, replies, papers, and archive.
 - Parliament official member listings (cross-reference bridge, limited).
-- IEC election **metadata + source manifests** (`iec_elections`,
-  `iec_source_manifests`) via `scripts/ingest_iec_metadata_manifest.py` —
-  **metadata only; no vote totals, winners, office-bearers, or geography/party
-  mappings** (see `docs/iec-election-results-ingestion.md`).
+- IEC election **metadata + source manifests + one audited local CSV
+  vote-total profile** (`iec_elections`, `iec_source_manifests`,
+  `iec_vote_totals`) via `scripts/ingest_iec_metadata_manifest.py` and
+  `scripts/ingest_iec_vote_totals.py`. There is **no live result workflow,
+  winner/office-holder inference, or internal geography/party/candidate
+  mapping** (see `docs/iec-election-results-ingestion.md`).
 
 ## 3. Discovery-only areas (no ingestion yet)
 
@@ -85,7 +87,8 @@ schema**:
    after a real scheduled/accountability sweep runs green, then close it.
 2. Entity resolution reporting (#28) — improve unresolved-actor quality
    before adding larger datasets.
-3. IEC discovery → schema → bounded ingestion (#24).
+3. IEC coverage/quality reporting, then a reviewed operator run against an
+   official file whose manifest and checksum are already stored (#24).
 4. Votes / divisions audit → bounded expansion only where explicit (#7).
 5. Gazette / Acts discovery → bill↔act linkage on explicit identifiers (#25).
 6. Municipal discovery → councils/office-bearers with confirmed terms (#26).

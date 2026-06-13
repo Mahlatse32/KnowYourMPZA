@@ -9,6 +9,7 @@ from app.models.document import Document
 from app.models.document_mention import DocumentMention
 from app.models.iec_election import IECElection
 from app.models.iec_source_manifest import IECSourceManifest
+from app.models.iec_vote_total import IECVoteTotal
 from app.models.ingestion_error import IngestionError
 from app.models.ingestion_run import IngestionRun
 from app.models.ingestion_sweep_state import IngestionSweepState
@@ -34,6 +35,7 @@ __all__ = [
     "DocumentMention",
     "IECElection",
     "IECSourceManifest",
+    "IECVoteTotal",
     "IngestionError",
     "IngestionRun",
     "IngestionSweepState",

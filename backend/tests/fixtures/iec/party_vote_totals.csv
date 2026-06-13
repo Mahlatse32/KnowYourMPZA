@@ -1,0 +1,4 @@
+Contest_ID,Contest_Name,Province_ID,Province_Name,Party_ID,Party_Name,Candidate_ID,Candidate_Name,Votes
+NPE-2024-NA,National Ballot,ZA,South Africa,P001,Alpha Party,,,1234
+NPE-2024-NA,National Ballot,ZA,South Africa,P002,Beta Party,,,567
+NPE-2024-NA,National Ballot,ZA,South Africa,P003,Gamma Party,,,not-a-number
