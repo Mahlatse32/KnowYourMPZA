@@ -45,10 +45,40 @@ entities.
 
 ## Running
 
+### Dry-run first
+
+Every operator run starts with `--dry-run`. Do not ingest a result file until
+its official source URL, manifest key, checksum, parser profile, row failures,
+and safety flags have been reviewed.
+
 Create or refresh metadata and manifests first:
 
 ```bash
 python scripts/ingest_iec_metadata_manifest.py --limit 20 --sleep 1.0
+```
+
+For a no-network validation, use the tiny test fixture:
+
+```bash
+python scripts/ingest_iec_metadata_manifest.py \
+  --dry-run \
+  --offline-fixture tests/fixtures/iec/metadata_manifest_dry_run.json \
+  --limit 1
+```
+
+### Select the manifest
+
+Choose only a reachable structured manifest whose URL and checksum match the
+reviewed local file. Query the database without printing the database
+connection string:
+
+```sql
+SELECT manifest_key, source_url, source_type, checksum_sha256,
+       election_type, election_year, geography_level
+FROM iec_source_manifests
+WHERE reachable = true
+  AND parser_readiness = 'structured-candidate'
+ORDER BY fetched_at DESC;
 ```
 
 Dry-run a reviewed official CSV against its existing manifest:
@@ -61,12 +91,69 @@ python scripts/ingest_iec_vote_totals.py \
 ```
 
 Remove `--dry-run` only after checking the manifest, checksum, row failures,
-and safety flags. Reports are:
+vote sum, unresolved source identifiers, and these explicit false flags:
+`winners_ingested`, `office_bearers_ingested`, and
+`internal_party_mapping_applied`.
+
+The real command is the same without `--dry-run`:
+
+```bash
+python scripts/ingest_iec_vote_totals.py \
+  --manifest-key "<reviewed-manifest-key>" \
+  --input-file "<reviewed-local-official-file.csv>"
+```
+
+Rerunning the same manifest/file pair is idempotent: existing source identities
+are updated and are not duplicated.
+
+### Verify reports
+
+Run both coverage views:
+
+```bash
+python scripts/report_data_coverage_dashboard.py
+python scripts/report_iec_coverage.py
+```
+
+The dedicated IEC report must have no orphaned totals, missing source URLs,
+missing manifest keys, or duplicate result keys. Yellow means coverage is
+incomplete; red means an integrity issue must be fixed. Green does not imply
+that winners or office-holders have been derived.
+
+Reports are:
 
 - `reports/iec_metadata_manifest_report.json`
 - `reports/iec_metadata_manifest_report.md`
 - `reports/iec_vote_totals_report.json`
 - `reports/iec_vote_totals_report.md`
+- `reports/iec_coverage_report.json`
+- `reports/iec_coverage_report.md`
+
+### Artifact hygiene
+
+Do not commit official result downloads, raw archives, generated reports,
+database exports, backups, `.env` files, or credentials. Keep reviewed source
+files outside the repository. Only tiny intentional offline test fixtures may
+be committed.
+
+### Manual workflow
+
+`.github/workflows/iec-ingestion-dry-run.yml` is manual-only. It applies the
+schema to an ephemeral database, runs the metadata fixture in dry-run mode,
+generates the IEC coverage report, and uploads reports as an Actions artifact.
+It does not download IEC files and never invokes vote-total ingestion.
+
+### Next live step
+
+Before any bounded live workflow is proposed:
+
+1. Review an official structured file and record its exact manifest/checksum.
+2. Dry-run locally and inspect every row failure.
+3. Run the dashboard and IEC quality report.
+4. Confirm no winner, councillor, office-holder, or internal entity mapping
+   was inferred.
+5. Design a bounded, explicit-file workflow with per-file failure capture and
+   no source discovery guesswork.
 
 ## Migrations
 
