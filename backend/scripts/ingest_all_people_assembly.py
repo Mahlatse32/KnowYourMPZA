@@ -1,7 +1,6 @@
 import argparse
 from pathlib import Path
 import sys
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -9,9 +8,17 @@ from app.db import SessionLocal
 from app.ingestion.people_assembly import discover_people_assembly_mp_urls, normalize_people_assembly_url
 from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
 from app.services.ingestion_service import ingest_people_assembly_profiles
+from scripts.ingestion_batch_utils import (
+    build_result,
+    discovery_failure,
+    emit_result,
+    run_url_batch,
+    should_fail,
+    systemic_failure,
+)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", default="data/people_assembly_urls.txt")
     parser.add_argument("--limit", type=int, default=None)
@@ -23,7 +30,12 @@ def main() -> None:
 
     path = Path(args.file)
     existing_urls = _read_urls(path)
-    discovered_urls = discover_people_assembly_mp_urls()
+    try:
+        discovered_urls = discover_people_assembly_mp_urls()
+    except Exception as exc:
+        result = discovery_failure("people_assembly", exc)
+        emit_result(result, "people_assembly_ingestion_summary.json")
+        return 1
     if args.write_discovered:
         _write_merged_urls(path, existing_urls, discovered_urls)
     urls = sorted({normalize_people_assembly_url(url) for url in existing_urls + discovered_urls})
@@ -35,18 +47,24 @@ def main() -> None:
     if args.dry_run or args.discover_only:
         for url in urls:
             print(url)
-        return
+        return 0
 
-    total = _summary()
-    with SessionLocal() as db:
-        run = start_ingestion_run(db, "People's Assembly", "bulk_people_assembly", len(urls))
-        for index, url in enumerate(urls, start=1):
-            print(f"[{index}/{len(urls)}] {url}")
-            part = ingest_people_assembly_profiles(db, [url])
-            _merge(total, part)
-            time.sleep(args.sleep)
-        finish_ingestion_run(db, run, total)
-    _print(total, len(urls))
+    try:
+        with SessionLocal() as db:
+            run = start_ingestion_run(db, "People's Assembly", "bulk_people_assembly", len(urls))
+            total, systemic = run_url_batch(
+                urls,
+                lambda url: ingest_people_assembly_profiles(db, [url]),
+                sleep_seconds=args.sleep,
+            )
+            finish_ingestion_run(db, run, total)
+    except Exception as exc:
+        result = systemic_failure("people_assembly", "database", exc)
+        emit_result(result, "people_assembly_ingestion_summary.json")
+        return 1
+    result = build_result("people_assembly", len(urls), total, systemic)
+    emit_result(result, "people_assembly_ingestion_summary.json")
+    return 1 if should_fail(result) else 0
 
 
 def _read_urls(path: Path) -> list[str]:
@@ -66,21 +84,5 @@ def _write_merged_urls(path: Path, existing: list[str], discovered: list[str]) -
     print(f"wrote_url_count: {len(merged)}")
 
 
-def _summary() -> dict:
-    return {"processed_count": 0, "created_count": 0, "updated_count": 0, "skipped_count": 0, "failed_count": 0, "errors": []}
-
-
-def _merge(total: dict, part: dict) -> None:
-    for key in ["processed_count", "created_count", "updated_count", "skipped_count", "failed_count"]:
-        total[key] += part.get(key, 0)
-    total["errors"].extend(part.get("errors", []))
-
-
-def _print(summary: dict, attempted: int) -> None:
-    print(f"attempted_count: {attempted}")
-    for key, value in summary.items():
-        print(f"{key}: {value}")
-
-
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

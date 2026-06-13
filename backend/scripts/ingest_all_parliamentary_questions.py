@@ -1,7 +1,6 @@
 import argparse
 from pathlib import Path
 import sys
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -9,9 +8,17 @@ from app.db import SessionLocal
 from app.ingestion.parliament_question_discovery import discover_parliamentary_question_urls
 from app.ingestion.parliament_questions import ingest_parliamentary_question_urls
 from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
+from scripts.ingestion_batch_utils import (
+    build_result,
+    discovery_failure,
+    emit_result,
+    run_url_batch,
+    should_fail,
+    systemic_failure,
+)
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--file", default="data/parliamentary_question_urls.txt")
     parser.add_argument("--limit", type=int, default=None)
@@ -20,25 +27,37 @@ def main() -> None:
     parser.add_argument("--year", type=int, default=None)
     args = parser.parse_args()
 
-    urls = sorted(set(_read_urls(Path(args.file)) + discover_parliamentary_question_urls(limit=args.limit, year=args.year)))
+    try:
+        discovered_urls = discover_parliamentary_question_urls(limit=args.limit, year=args.year)
+    except Exception as exc:
+        result = discovery_failure("parliamentary_questions", exc)
+        emit_result(result, "parliamentary_questions_ingestion_summary.json")
+        return 1
+    urls = sorted(set(_read_urls(Path(args.file)) + discovered_urls))
     if args.limit:
         urls = urls[: args.limit]
     print(f"attempted_count: {len(urls)}")
     if args.dry_run:
         for url in urls:
             print(url)
-        return
+        return 0
 
-    total = _summary()
-    with SessionLocal() as db:
-        run = start_ingestion_run(db, "Parliamentary Questions", "PARLIAMENTARY_QUESTIONS", len(urls))
-        for index, url in enumerate(urls, start=1):
-            print(f"[{index}/{len(urls)}] {url}")
-            part = ingest_parliamentary_question_urls(db, [url])
-            _merge(total, part)
-            time.sleep(args.sleep)
-        finish_ingestion_run(db, run, total)
-    _print(total)
+    try:
+        with SessionLocal() as db:
+            run = start_ingestion_run(db, "Parliamentary Questions", "PARLIAMENTARY_QUESTIONS", len(urls))
+            total, systemic = run_url_batch(
+                urls,
+                lambda url: ingest_parliamentary_question_urls(db, [url]),
+                sleep_seconds=args.sleep,
+            )
+            finish_ingestion_run(db, run, total)
+    except Exception as exc:
+        result = systemic_failure("parliamentary_questions", "database", exc)
+        emit_result(result, "parliamentary_questions_ingestion_summary.json")
+        return 1
+    result = build_result("parliamentary_questions", len(urls), total, systemic)
+    emit_result(result, "parliamentary_questions_ingestion_summary.json")
+    return 1 if should_fail(result) else 0
 
 
 def _read_urls(path: Path) -> list[str]:
@@ -47,20 +66,5 @@ def _read_urls(path: Path) -> list[str]:
     return [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("#")]
 
 
-def _summary() -> dict:
-    return {"processed_count": 0, "created_count": 0, "updated_count": 0, "skipped_count": 0, "failed_count": 0, "errors": []}
-
-
-def _merge(total: dict, part: dict) -> None:
-    for key in ["processed_count", "created_count", "updated_count", "skipped_count", "failed_count"]:
-        total[key] += part.get(key, 0)
-    total["errors"].extend(part.get("errors", []))
-
-
-def _print(summary: dict) -> None:
-    for key, value in summary.items():
-        print(f"{key}: {value}")
-
-
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
