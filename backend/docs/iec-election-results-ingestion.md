@@ -62,9 +62,25 @@ Reports: `reports/iec_metadata_manifest_report.{json,md}` (gitignored).
 
 ## Next recommended IEC PR
 
-Parse **one** official structured IEC result format (e.g. a specific CSV/XLSX
-export reachable from a manifest with `parser_readiness =
-structured-candidate`) into **vote totals only**, behind fixture tests:
+Run the structured format audit before implementing result parsing:
+
+```bash
+python scripts/audit_iec_structured_formats.py \
+  --offline-fixture tests/fixtures/iec/structured_format_audit.json
+```
+
+The audit writes `reports/iec_structured_format_audit.{json,md}` and performs
+no DB writes or large downloads. A format is safe for a parser foundation only
+when its audited header/schema contains an explicit vote-total column plus
+source contest and party/candidate identifiers.
+
+The tiny audit fixture selects **CSV** as the preferred parser foundation.
+This is a header-profile decision, not a claim that live vote totals have been
+downloaded or ingested. The exact source manifest and columns must be
+revalidated before any live run.
+
+Parse **one** audited official structured IEC result format into **vote totals
+only**, behind fixture tests:
 
 - Add a `iec_result_rows` (or similar) table keyed to a manifest + explicit
   geography/contest identifiers **from the source** — never inferred.
