@@ -103,6 +103,35 @@ schema**:
 6. Municipal discovery → councils/office-bearers with confirmed terms (#26).
 7. Chapter 9 discovery → report metadata, then evidence-located findings (#27).
 
+## 6a. IEC election results (#24) — progress
+
+Issue #24 remains **open**. Full IEC results ingestion is not complete.
+
+**Completed (merged to main):**
+- Source discovery (`scripts/discover_iec_sources.py`).
+- Structured-format audit (`scripts/audit_iec_structured_formats.py`).
+- Election metadata + source manifests (`iec_elections`, `iec_source_manifests`).
+- One audited CSV vote-totals parser foundation (`iec_vote_totals`,
+  `scripts/ingest_iec_vote_totals.py`) — local/reviewed-file driven only.
+- IEC coverage quality report (`scripts/report_iec_coverage.py`).
+- Manual dry-run workflow (`.github/workflows/iec-ingestion-dry-run.yml`).
+- Bounded live-download audit (`scripts/audit_iec_live_downloads.py`).
+- Reviewed-file ingestion workflow
+  (`.github/workflows/iec-reviewed-file-ingestion.yml`).
+- Unresolved source-identifiers report
+  (`scripts/report_iec_unresolved_identifiers.py`).
+
+**Remaining before #24 can close:**
+- One controlled reviewed real-file ingestion into real vote totals with a
+  reviewed coverage report.
+- Live-download audit validation against reviewed official URLs.
+- Parsers for multiple official result formats.
+- Historical election coverage.
+- Corrected/revised release handling.
+- Explicit source-identifier registries and reconciliation reports.
+- No winner/office-holder/councillor inference and no internal party/geography
+  mapping until separately designed and source-backed.
+
 ## 7. Public-readiness checklist
 
 Before any public-facing completeness claim:
