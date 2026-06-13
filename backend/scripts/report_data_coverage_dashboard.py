@@ -29,6 +29,7 @@ MODEL_SPECS = {
     "unresolved_entities": ("app.models.unresolved_entity", "UnresolvedEntity"),
     "iec_elections": ("app.models.iec_election", "IECElection"),
     "iec_source_manifests": ("app.models.iec_source_manifest", "IECSourceManifest"),
+    "iec_vote_totals": ("app.models.iec_vote_total", "IECVoteTotal"),
 }
 
 EXECUTIVE_MODELS = {
@@ -145,6 +146,16 @@ class ModelAccess:
             where = where & model.source_name.in_(source_names)
         return self.count("unresolved_entities", where)
 
+    def aggregate(self, key: str, expression) -> int | None:
+        model = self.model(key)
+        if model is None:
+            return None
+        try:
+            return int(self.db.scalar(select(expression).select_from(model)) or 0)
+        except SQLAlchemyError:
+            self.db.rollback()
+            return None
+
     def _count_missing(self, model, column, where) -> int:
         return self._count_where(model, _is_blank(column), where)
 
@@ -213,13 +224,18 @@ def collect_discovery_status(reports_dir: str | Path | None) -> list[dict]:
 
 
 def iec_coverage(access: "ModelAccess") -> dict:
-    """IEC metadata/manifest coverage. Reports `unavailable` if the tables do
-    not exist yet (e.g. migration not applied). Vote totals are never ingested
-    at this stage, so the flag is always False."""
+    """IEC metadata, manifest, and source vote-total coverage."""
     manifests_model = access.model("iec_source_manifests")
     elections_model = access.model("iec_elections")
-    if manifests_model is None and elections_model is None:
-        return {"status": "unavailable", "vote_totals_ingested": False}
+    votes_model = access.model("iec_vote_totals")
+    if manifests_model is None and elections_model is None and votes_model is None:
+        return {
+            "status": "unavailable",
+            "vote_totals_ingested": False,
+            "winners_ingested": False,
+            "office_bearers_ingested": False,
+            "internal_party_mapping_applied": False,
+        }
     manifest_cov = access.coverage(
         "iec_source_manifests",
         source_url_field="source_url",
@@ -234,6 +250,12 @@ def iec_coverage(access: "ModelAccess") -> dict:
         access.count("iec_source_manifests", manifests_model.parser_readiness == "structured-candidate")
         if manifests_model is not None else None
     )
+    vote_count = access.count("iec_vote_totals")
+    vote_sum = access.aggregate("iec_vote_totals", func.sum(votes_model.vote_total)) if votes_model is not None else None
+    manifest_count = (
+        access.aggregate("iec_vote_totals", func.count(func.distinct(votes_model.manifest_key)))
+        if votes_model is not None else None
+    )
     return {
         "status": "available",
         "iec_elections_count": access.count("iec_elections"),
@@ -241,7 +263,13 @@ def iec_coverage(access: "ModelAccess") -> dict:
         "reachable_manifest_count": reachable,
         "structured_candidate_count": structured,
         "missing_source_url_count": manifest_cov.get("records_missing_source_url"),
-        "vote_totals_ingested": False,
+        "iec_vote_totals_count": vote_count,
+        "iec_vote_total_sum": vote_sum,
+        "iec_vote_manifest_count": manifest_count,
+        "vote_totals_ingested": bool(vote_count),
+        "winners_ingested": False,
+        "office_bearers_ingested": False,
+        "internal_party_mapping_applied": False,
     }
 
 
@@ -493,10 +521,19 @@ def render_markdown(report: dict) -> str:
                 f"- Structured-candidate manifests: {_display(iec.get('structured_candidate_count'))}",
                 f"- Manifests missing source URL: {_display(iec.get('missing_source_url_count'))}",
                 f"- Vote totals ingested: {iec.get('vote_totals_ingested')}",
+                f"- IEC vote-total rows: {_display(iec.get('iec_vote_totals_count'))}",
+                f"- IEC vote-total sum: {_display(iec.get('iec_vote_total_sum'))}",
+                f"- Vote-total manifests represented: {_display(iec.get('iec_vote_manifest_count'))}",
+                f"- Winners ingested: {iec.get('winners_ingested')}",
+                f"- Office-bearers ingested: {iec.get('office_bearers_ingested')}",
+                f"- Internal party mapping applied: {iec.get('internal_party_mapping_applied')}",
             ]
         )
     else:
-        lines.append("IEC metadata/manifest tables unavailable (migration not applied). Vote totals ingested: False")
+        lines.append(
+            "IEC metadata/manifest/vote-total tables unavailable (migration not applied). "
+            "Vote totals ingested: False"
+        )
 
     discovery = report.get("source_discovery_status") or []
     lines.extend(["", "## Source Discovery Status", ""])

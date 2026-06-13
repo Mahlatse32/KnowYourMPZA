@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from app.db import Base
 from app.models.iec_election import IECElection
 from app.models.iec_source_manifest import IECSourceManifest
+from app.models.iec_vote_total import IECVoteTotal
 
 from ingest_iec_metadata_manifest import (
     build_report,
@@ -189,7 +190,7 @@ def test_all_sources_fail_reported(db):
 # No vote totals / winners / office-bearers
 # ---------------------------------------------------------------------------
 
-def test_no_vote_totals_or_winners(db):
+def test_metadata_ingestion_creates_no_vote_totals_or_winners(db):
     run_ingest(db, SOURCES, _fetcher(), dry_run=False)
     report = build_report(run_ingest(db, SOURCES, _fetcher(), dry_run=True))
     assert report["vote_totals_ingested"] is False
@@ -201,9 +202,12 @@ def test_no_vote_totals_or_winners(db):
             for c in cols
             for tok in ("vote", "winner", "result", "councillor", "office_bearer", "candidate")
         )
-    # No such rows exist either (tables for them were never created).
+    # The parser-foundation table now exists, but metadata ingestion never
+    # writes to it and still cannot create result/winner records.
     names = set(inspect(db.get_bind()).get_table_names())
-    assert "iec_vote_totals" not in names and "iec_results" not in names
+    assert "iec_vote_totals" in names
+    assert db.scalar(select(IECVoteTotal).limit(1)) is None
+    assert "iec_results" not in names
 
 
 # ---------------------------------------------------------------------------

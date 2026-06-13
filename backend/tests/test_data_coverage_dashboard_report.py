@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -8,6 +9,8 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base
 from app.models.party import Party
 from app.models.politician import Politician
+from app.models.iec_source_manifest import IECSourceManifest
+from app.models.iec_vote_total import IECVoteTotal
 from scripts.report_data_coverage_dashboard import (
     build_report,
     collect_discovery_status,
@@ -141,7 +144,13 @@ def test_iec_coverage_available_when_tables_exist():
     assert iec["status"] == "available"
     assert iec["iec_elections_count"] == 0
     assert iec["iec_source_manifests_count"] == 0
+    assert iec["iec_vote_totals_count"] == 0
+    assert iec["iec_vote_total_sum"] == 0
+    assert iec["iec_vote_manifest_count"] == 0
     assert iec["vote_totals_ingested"] is False
+    assert iec["winners_ingested"] is False
+    assert iec["office_bearers_ingested"] is False
+    assert iec["internal_party_mapping_applied"] is False
     assert "## IEC Coverage" in render_markdown(report)
 
 
@@ -153,3 +162,43 @@ def test_iec_coverage_unavailable_when_tables_missing():
         session.close()
     assert report["iec_coverage"]["status"] == "unavailable"
     assert report["iec_coverage"]["vote_totals_ingested"] is False
+
+
+def test_iec_coverage_counts_vote_totals_without_inferring_outcomes():
+    session = _session()
+    try:
+        manifest = IECSourceManifest(
+            manifest_key="manifest-1",
+            source_url="https://results.elections.org.za/source.csv",
+            source_domain="results.elections.org.za",
+            source_type="csv",
+            reachable=True,
+            parser_readiness="structured-candidate",
+            fetched_at=datetime.now(UTC),
+            raw_manifest_json={},
+        )
+        session.add(manifest)
+        session.add(
+            IECVoteTotal(
+                result_key="iec-vote:test",
+                manifest_key="manifest-1",
+                source_url=manifest.source_url,
+                source_format="csv",
+                source_row_number=2,
+                source_contest_id="C1",
+                source_party_id="P1",
+                vote_total=42,
+                raw_row_json={"Votes": "42"},
+                row_checksum_sha256="b" * 64,
+            )
+        )
+        session.commit()
+        iec = build_report(session)["iec_coverage"]
+    finally:
+        session.close()
+
+    assert iec["iec_vote_totals_count"] == 1
+    assert iec["iec_vote_total_sum"] == 42
+    assert iec["iec_vote_manifest_count"] == 1
+    assert iec["vote_totals_ingested"] is True
+    assert iec["winners_ingested"] is False
