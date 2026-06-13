@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "manifest_key": "iec-audit-csv-2024",
+      "source_url": "https://results.elections.org.za/home/NPEResults/2024/party-results.csv",
+      "source_type": "csv",
+      "election_type": "national",
+      "election_year": 2024,
+      "geography_level": "national/provincial",
+      "columns": ["Contest_ID", "Contest_Name", "Province_ID", "Province_Name", "Party_ID", "Party_Name", "Votes"],
+      "risks": ["Header profile must be revalidated against the exact downloaded manifest before live ingestion."]
+    },
+    {
+      "manifest_key": "iec-audit-json-no-votes",
+      "source_url": "https://results.elections.org.za/home/NPEResults/2024/metadata.json",
+      "source_type": "json",
+      "election_type": "national",
+      "election_year": 2024,
+      "geography_level": "national",
+      "columns": ["Contest_ID", "Party_ID", "Party_Name"]
+    },
+    {
+      "manifest_key": "iec-audit-pdf",
+      "source_url": "https://results.elections.org.za/home/NPEResults/2024/results-report.pdf",
+      "source_type": "pdf",
+      "election_type": "national",
+      "election_year": 2024,
+      "geography_level": "national",
+      "columns": []
+    }
+  ]
+}

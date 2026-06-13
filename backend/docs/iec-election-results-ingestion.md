@@ -68,6 +68,30 @@ and safety flags. Reports are:
 - `reports/iec_vote_totals_report.json`
 - `reports/iec_vote_totals_report.md`
 
+## Structured format audit
+
+Run the structured format audit before parsing a result file:
+
+```bash
+python scripts/audit_iec_structured_formats.py \
+  --offline-fixture tests/fixtures/iec/structured_format_audit.json
+```
+
+The audit writes `reports/iec_structured_format_audit.{json,md}` and performs
+no DB writes or large downloads. A format is safe for a parser foundation only
+when its audited header/schema contains an explicit vote-total column plus
+source contest and party/candidate identifiers.
+
+The tiny audit fixture selects **CSV** as the preferred parser foundation.
+This is a header-profile decision, not a claim that live vote totals have been
+downloaded or ingested. The exact source manifest and columns must be
+revalidated before any operator run.
+
+PR #40 implements that single audited CSV profile for **vote totals only**.
+It preserves the manifest checksum, source identifiers, raw row, and row
+checksum, while leaving source parties, candidates, and geographies unmapped.
+No live IEC download or scheduled vote-total ingestion is enabled.
+
 ## Migrations
 
 - `0011_add_iec_metadata_manifest.py` adds election metadata and source
