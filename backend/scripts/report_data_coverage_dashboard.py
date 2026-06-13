@@ -27,6 +27,8 @@ MODEL_SPECS = {
     "parliamentary_questions": ("app.models.parliamentary_question", "ParliamentaryQuestion"),
     "documents": ("app.models.document", "Document"),
     "unresolved_entities": ("app.models.unresolved_entity", "UnresolvedEntity"),
+    "iec_elections": ("app.models.iec_election", "IECElection"),
+    "iec_source_manifests": ("app.models.iec_source_manifest", "IECSourceManifest"),
 }
 
 EXECUTIVE_MODELS = {
@@ -210,6 +212,39 @@ def collect_discovery_status(reports_dir: str | Path | None) -> list[dict]:
     return statuses
 
 
+def iec_coverage(access: "ModelAccess") -> dict:
+    """IEC metadata/manifest coverage. Reports `unavailable` if the tables do
+    not exist yet (e.g. migration not applied). Vote totals are never ingested
+    at this stage, so the flag is always False."""
+    manifests_model = access.model("iec_source_manifests")
+    elections_model = access.model("iec_elections")
+    if manifests_model is None and elections_model is None:
+        return {"status": "unavailable", "vote_totals_ingested": False}
+    manifest_cov = access.coverage(
+        "iec_source_manifests",
+        source_url_field="source_url",
+        source_date_field=None,
+        identity_fields=("manifest_key",),
+    )
+    reachable = (
+        access.count("iec_source_manifests", manifests_model.reachable.is_(True))
+        if manifests_model is not None else None
+    )
+    structured = (
+        access.count("iec_source_manifests", manifests_model.parser_readiness == "structured-candidate")
+        if manifests_model is not None else None
+    )
+    return {
+        "status": "available",
+        "iec_elections_count": access.count("iec_elections"),
+        "iec_source_manifests_count": access.count("iec_source_manifests"),
+        "reachable_manifest_count": reachable,
+        "structured_candidate_count": structured,
+        "missing_source_url_count": manifest_cov.get("records_missing_source_url"),
+        "vote_totals_ingested": False,
+    }
+
+
 def build_report(
     db,
     model_loader: Callable[[str], object | None] | None = None,
@@ -364,6 +399,7 @@ def build_report(
         "data_quality_risks": risks,
         "duplicate_identifier_candidates": duplicate_candidates,
         "unresolved_entities_open": total_unresolved,
+        "iec_coverage": iec_coverage(access),
         "source_discovery_status": collect_discovery_status(reports_dir),
         "next_recommended_actions": actions,
         "public_claim_readiness": {
@@ -445,6 +481,22 @@ def render_markdown(report: dict) -> str:
     )
     for risk in report["data_quality_risks"]:
         lines.append(f"| {risk['level'].upper()} | {risk['risk']} | {_display(risk['value'])} | {risk['detail']} |")
+
+    iec = report.get("iec_coverage") or {}
+    lines.extend(["", "## IEC Coverage", ""])
+    if iec.get("status") == "available":
+        lines.extend(
+            [
+                f"- IEC elections (metadata): {_display(iec.get('iec_elections_count'))}",
+                f"- IEC source manifests: {_display(iec.get('iec_source_manifests_count'))}",
+                f"- Reachable manifests: {_display(iec.get('reachable_manifest_count'))}",
+                f"- Structured-candidate manifests: {_display(iec.get('structured_candidate_count'))}",
+                f"- Manifests missing source URL: {_display(iec.get('missing_source_url_count'))}",
+                f"- Vote totals ingested: {iec.get('vote_totals_ingested')}",
+            ]
+        )
+    else:
+        lines.append("IEC metadata/manifest tables unavailable (migration not applied). Vote totals ingested: False")
 
     discovery = report.get("source_discovery_status") or []
     lines.extend(["", "## Source Discovery Status", ""])

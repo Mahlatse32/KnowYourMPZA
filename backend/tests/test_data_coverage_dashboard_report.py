@@ -129,3 +129,27 @@ def test_dashboard_markdown_has_discovery_section():
     finally:
         session.close()
     assert "## Source Discovery Status" in markdown
+
+
+def test_iec_coverage_available_when_tables_exist():
+    session = _session()  # creates all tables incl. iec_*
+    try:
+        report = build_report(session)
+    finally:
+        session.close()
+    iec = report["iec_coverage"]
+    assert iec["status"] == "available"
+    assert iec["iec_elections_count"] == 0
+    assert iec["iec_source_manifests_count"] == 0
+    assert iec["vote_totals_ingested"] is False
+    assert "## IEC Coverage" in render_markdown(report)
+
+
+def test_iec_coverage_unavailable_when_tables_missing():
+    session = _session(create_tables=False)
+    try:
+        report = build_report(session)
+    finally:
+        session.close()
+    assert report["iec_coverage"]["status"] == "unavailable"
+    assert report["iec_coverage"]["vote_totals_ingested"] is False
