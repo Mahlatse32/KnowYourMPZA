@@ -75,8 +75,9 @@ format, granularity, parser readiness) and write reports under `reports/`.
 **Discovery/audit is not ingestion** — no records are created and no schema is
 added until a parser is validated and tested.
 
-| Candidate | Script | Report | Status |
+| Candidate | Discovery script | Report | Status |
 |---|---|---|---|
+| IEC election results | `scripts/discover_iec_sources.py` | `reports/iec_source_discovery.json` / `.md` | Discovery only — no results ingested, schema deferred |
 | Parliamentary votes / divisions | `scripts/audit_votes_divisions_sources.py` (design: `docs/votes-divisions-ingestion-design.md`) | `reports/votes_divisions_source_audit.json` / `.md` | Audit + design only — PMG minutes implemented (limited); no MP-level expansion yet |
 
 ## Priority scoring

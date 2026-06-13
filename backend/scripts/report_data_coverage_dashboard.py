@@ -179,7 +179,42 @@ def load_model(key: str):
         return None
 
 
-def build_report(db, model_loader: Callable[[str], object | None] | None = None) -> dict:
+def collect_discovery_status(reports_dir: str | Path | None) -> list[dict]:
+    """Summarize any source-discovery / source-audit reports present under
+    reports_dir. This lets discovery-only sources (IEC, Gazette, municipal,
+    Chapter 9, votes audit) surface on the dashboard without each discovery
+    PR having to edit this script. Reads only our own already-redacted
+    reports; returns [] when reports_dir is None or absent."""
+    if reports_dir is None:
+        return []
+    directory = Path(reports_dir)
+    if not directory.is_dir():
+        return []
+    statuses: list[dict] = []
+    patterns = sorted(set(directory.glob("*_source_discovery.json")) | set(directory.glob("*_source_audit.json")))
+    for path in patterns:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        statuses.append(
+            {
+                "report": path.name,
+                "source": data.get("source"),
+                "status": data.get("status", "discovery-only"),
+                "sources_listed": data.get("total_sources") or data.get("total") or len(data.get("sources", [])),
+                "reachable_count": data.get("reachable_count"),
+                "ingested": False,
+            }
+        )
+    return statuses
+
+
+def build_report(
+    db,
+    model_loader: Callable[[str], object | None] | None = None,
+    reports_dir: str | Path | None = None,
+) -> dict:
     access = ModelAccess(db, model_loader)
     executive_summary = {}
     availability = {}
@@ -329,6 +364,7 @@ def build_report(db, model_loader: Callable[[str], object | None] | None = None)
         "data_quality_risks": risks,
         "duplicate_identifier_candidates": duplicate_candidates,
         "unresolved_entities_open": total_unresolved,
+        "source_discovery_status": collect_discovery_status(reports_dir),
         "next_recommended_actions": actions,
         "public_claim_readiness": {
             "safe_for_public_facing_completeness_claims": has_data and not red_risks,
@@ -410,6 +446,18 @@ def render_markdown(report: dict) -> str:
     for risk in report["data_quality_risks"]:
         lines.append(f"| {risk['level'].upper()} | {risk['risk']} | {_display(risk['value'])} | {risk['detail']} |")
 
+    discovery = report.get("source_discovery_status") or []
+    lines.extend(["", "## Source Discovery Status", ""])
+    if discovery:
+        lines.extend(["| Report | Source | Status | Sources listed | Ingested |", "|---|---|---|---:|---|"])
+        for d in discovery:
+            lines.append(
+                f"| {d['report']} | {d.get('source') or '—'} | {d.get('status') or '—'} | "
+                f"{_display(d.get('sources_listed'))} | {'no' if not d.get('ingested') else 'yes'} |"
+            )
+    else:
+        lines.append("No source-discovery reports present. Discovery is separate from ingestion.")
+
     readiness = report["public_claim_readiness"]
     lines.extend(
         [
@@ -433,7 +481,7 @@ def main() -> int:
     from app.db import SessionLocal
 
     with SessionLocal() as db:
-        report = build_report(db)
+        report = build_report(db, reports_dir="reports")
     json_path, markdown_path = write_report_files(report)
     print(json.dumps({"json_report": str(json_path), "markdown_report": str(markdown_path)}, sort_keys=True))
     return 0
