@@ -243,6 +243,26 @@ It preserves the manifest checksum, source identifiers, raw row, and row
 checksum, while leaving source parties, candidates, and geographies unmapped.
 No live IEC download or scheduled vote-total ingestion is enabled.
 
+## Unresolved source identifiers
+
+`scripts/report_iec_unresolved_identifiers.py` lists the distinct
+source-supplied identifiers in `iec_vote_totals` (party, candidate, geography,
+contest) with row counts, vote sums, and provenance:
+
+```bash
+python scripts/report_iec_unresolved_identifiers.py
+```
+
+It writes `reports/iec_unresolved_identifiers.{json,md}`, is unavailable-safe
+if the table is absent, performs **no database writes**, and every grouped
+identifier carries `mapping_status: unresolved`. It creates **no** mapping to
+internal parties/politicians/geographies and infers **no** winners.
+
+**Next reconciliation phase is an explicit source-identifier registry, not
+fuzzy matching.** A future PR should add registry tables keyed on exact
+official IDs and resolve only those; identifiers without an exact official
+match stay unresolved.
+
 ## Migrations
 
 - `0011_add_iec_metadata_manifest.py` adds election metadata and source
