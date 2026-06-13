@@ -79,6 +79,7 @@ validated and tested.
 |---|---|---|---|
 | IEC election results | `scripts/discover_iec_sources.py` | `reports/iec_source_discovery.json` / `.md` | Discovery only — no results ingested, schema deferred |
 | Gazette / Acts / Bills metadata | `scripts/discover_gazette_acts_sources.py` (design: `docs/gazette-acts-bills-ingestion-design.md`) | `reports/gazette_acts_source_discovery.json` / `.md` | Discovery + design only — no gazettes/acts ingested |
+| Municipal councils & office-bearers | `scripts/discover_municipal_sources.py` (design: `docs/municipal-councils-ingestion-design.md`) | `reports/municipal_source_discovery.json` / `.md` | Discovery + design only — no councils/office-bearers ingested |
 | Chapter 9 institution reports | `scripts/discover_chapter9_report_sources.py` (design: `docs/chapter9-reports-ingestion-design.md`) | `reports/chapter9_source_discovery.json` / `.md` | Discovery + design only — no reports ingested, no findings extracted |
 
 ## Priority scoring
