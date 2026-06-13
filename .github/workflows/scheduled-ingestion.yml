@@ -58,6 +58,10 @@ jobs:
         if: always()
         run: python scripts/report_data_coverage_dashboard.py || true
 
+      - name: Entity resolution candidate report
+        if: always()
+        run: python scripts/report_entity_resolution_candidates.py --limit 100 || true
+
       - name: Generate ingestion brief
         if: always()
         run: python scripts/generate_ingestion_brief.py --reports-dir reports || true
@@ -140,6 +144,10 @@ jobs:
       - name: Data coverage dashboard
         if: always()
         run: python scripts/report_data_coverage_dashboard.py || true
+
+      - name: Entity resolution candidate report
+        if: always()
+        run: python scripts/report_entity_resolution_candidates.py --limit 100 || true
 
       - name: Generate ingestion brief
         if: always()
