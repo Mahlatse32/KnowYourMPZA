@@ -1,0 +1,154 @@
+name: IEC reviewed-file ingestion
+
+# Manual only. Ingests vote totals from a REVIEWED local file against an
+# existing manifest. Defaults to dry-run and validates against a tiny committed
+# fixture. It never downloads IEC files, never schedules, and never uses a
+# persistent/production database (an ephemeral PostgreSQL service is used).
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_key:
+        description: "Existing iec_source_manifests key. Empty = use a fixture-created manifest (validation only)."
+        required: false
+        default: ""
+      reviewed_file_path:
+        description: "Path to a reviewed official CSV under tests/fixtures/iec/ or data/iec/. Empty = committed fixture (dry-run validation only)."
+        required: false
+        default: ""
+      dry_run:
+        description: "Dry-run first. Set to false only with an explicit reviewed_file_path."
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+      upload_reports:
+        description: "Upload generated reports as an artifact."
+        required: false
+        default: "true"
+        type: choice
+        options: ["true", "false"]
+
+permissions:
+  contents: read
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      # Ephemeral validation database only — never a persistent/production DB.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: knowyourmpza
+          POSTGRES_PASSWORD: knowyourmpza
+          POSTGRES_DB: knowyourmpza
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U knowyourmpza -d knowyourmpza"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      ENVIRONMENT: development
+      DATABASE_URL: postgresql+psycopg://knowyourmpza:knowyourmpza@localhost:5432/knowyourmpza
+      INPUT_MANIFEST_KEY: ${{ github.event.inputs.manifest_key }}
+      INPUT_REVIEWED_FILE_PATH: ${{ github.event.inputs.reviewed_file_path }}
+      INPUT_DRY_RUN: ${{ github.event.inputs.dry_run || 'true' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      - name: Apply schema to ephemeral validation database
+        run: alembic upgrade head
+
+      - name: Validate inputs (refuse unsafe runs)
+        run: |
+          DRY="${INPUT_DRY_RUN}"
+          FP="${INPUT_REVIEWED_FILE_PATH}"
+          # Default to the committed fixture only for dry-run validation.
+          if [ -z "$FP" ]; then
+            if [ "$DRY" != "true" ]; then
+              echo "::error::reviewed_file_path is required when dry_run=false."
+              exit 1
+            fi
+            FP="tests/fixtures/iec/party_vote_totals.csv"
+          fi
+          # Path safety: must live under an allowed reviewed-file directory and
+          # contain no parent-directory traversal.
+          case "$FP" in
+            tests/fixtures/iec/*|data/iec/*) ;;
+            *)
+              echo "::error::reviewed_file_path must be under tests/fixtures/iec/ or data/iec/."
+              exit 1 ;;
+          esac
+          case "$FP" in
+            *..*)
+              echo "::error::reviewed_file_path must not contain '..'."
+              exit 1 ;;
+          esac
+          if [ ! -f "$FP" ]; then
+            echo "::error::reviewed_file_path does not exist: $FP"
+            exit 1
+          fi
+          echo "REVIEWED_FILE_PATH=$FP" >> "$GITHUB_ENV"
+
+      - name: Ensure a manifest row exists (offline fixture; ephemeral DB)
+        run: >-
+          python scripts/ingest_iec_metadata_manifest.py
+          --offline-fixture tests/fixtures/iec/metadata_manifest_dry_run.json
+          --limit 1
+          --reports-dir reports
+          --json-only
+
+      - name: Resolve manifest key
+        run: |
+          if [ -n "$INPUT_MANIFEST_KEY" ]; then
+            MK="$INPUT_MANIFEST_KEY"
+          else
+            MK=$(python -c "from app.db import SessionLocal; from app.models.iec_source_manifest import IECSourceManifest; from sqlalchemy import select; db=SessionLocal(); m=db.scalar(select(IECSourceManifest)); print(m.manifest_key if m else '')")
+          fi
+          if [ -z "$MK" ]; then
+            echo "::error::No manifest key available (none supplied and none found)."
+            exit 1
+          fi
+          echo "MANIFEST_KEY=$MK" >> "$GITHUB_ENV"
+
+      - name: Ingest IEC vote totals from reviewed file
+        run: |
+          DRY_FLAG=""
+          if [ "$INPUT_DRY_RUN" = "true" ]; then
+            DRY_FLAG="--dry-run"
+          fi
+          python scripts/ingest_iec_vote_totals.py \
+            --manifest-key "$MANIFEST_KEY" \
+            --input-file "$REVIEWED_FILE_PATH" \
+            --reports-dir reports \
+            $DRY_FLAG
+
+      - name: Generate IEC coverage report
+        if: always()
+        run: python scripts/report_iec_coverage.py
+
+      - name: Upload IEC ingestion reports
+        if: always() && github.event.inputs.upload_reports != 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: iec-reviewed-file-ingestion-reports
+          path: backend/reports/
+          if-no-files-found: warn
+          retention-days: 14

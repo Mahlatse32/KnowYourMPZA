@@ -143,6 +143,38 @@ schema to an ephemeral database, runs the metadata fixture in dry-run mode,
 generates the IEC coverage report, and uploads reports as an Actions artifact.
 It does not download IEC files and never invokes vote-total ingestion.
 
+### Reviewed-file ingestion workflow
+
+`.github/workflows/iec-reviewed-file-ingestion.yml` is **manual-dispatch only**
+(no schedule) and ingests vote totals from a **reviewed local file** against an
+existing manifest. It uses an **ephemeral** PostgreSQL service — never a
+persistent/production database — and **never downloads IEC files**.
+
+Inputs: `manifest_key`, `reviewed_file_path`, `dry_run` (default `true`),
+`upload_reports` (default `true`). The workflow **refuses** to run when:
+
+- `dry_run=false` and `reviewed_file_path` is empty,
+- `reviewed_file_path` is outside `tests/fixtures/iec/` or `data/iec/`,
+- `reviewed_file_path` contains `..`, or
+- the file does not exist.
+
+With no inputs it performs a dry-run validation against the committed fixture
+`tests/fixtures/iec/party_vote_totals.csv`. It never echoes `DATABASE_URL`.
+
+Operator flow for a real run:
+
+1. Save the reviewed official file locally under `data/iec/` (gitignored;
+   never commit it). Record its source URL and checksum.
+2. Confirm a matching manifest row exists (`manifest_key`); create it via
+   `scripts/ingest_iec_metadata_manifest.py` if needed.
+3. Dispatch with `dry_run=true` first; review the vote-totals and IEC coverage
+   report artifacts (row failures, vote sum, unresolved source identifiers,
+   `winners_ingested`/`office_bearers_ingested`/`internal_party_mapping_applied`
+   false flags).
+4. Only then dispatch with `dry_run=false`, the explicit `manifest_key`, and the
+   reviewed `reviewed_file_path`.
+5. Verify rows and coverage; do not commit the reviewed file or any reports.
+
 ### Next live step
 
 Before any bounded live workflow is proposed:
@@ -154,6 +186,38 @@ Before any bounded live workflow is proposed:
    was inferred.
 5. Design a bounded, explicit-file workflow with per-file failure capture and
    no source discovery guesswork.
+
+## Controlled live download audit
+
+Before proposing any live ingestion path, audit official IEC downloads with
+`scripts/audit_iec_live_downloads.py`. It performs **bounded, safe** HEAD/GET
+inspection only — it writes no database rows, ingests no vote totals, commits
+no downloaded files, and never prints secrets.
+
+```bash
+# offline validation (tests use this; no network)
+python scripts/audit_iec_live_downloads.py \
+  --offline-fixture tests/fixtures/iec/live_download_audit.json
+
+# reviewed official URL(s)
+python scripts/audit_iec_live_downloads.py \
+  --url "https://results.elections.org.za/<reviewed-structured-file>" \
+  --max-bytes 1000000
+```
+
+Safety constraints:
+
+- Official IEC domains only (`elections.org.za`); off-domain URLs and any
+  redirect that lands off-domain are rejected as failures, never followed.
+- At most `--max-bytes` of the body are read; larger responses are sampled and
+  flagged `oversize` / unsafe for a full fetch.
+- Allowed content types only; others are risk-flagged.
+- A CSV is `structured-candidate` only when its header carries an explicit vote
+  column plus source contest and party/candidate identifiers.
+
+It writes `reports/iec_live_download_audit.{json,md}` (gitignored). Per-URL
+failures are captured; if every URL fails the run exits non-zero. This audit is
+a prerequisite review step, not an ingestion step.
 
 ## Structured format audit
 
@@ -179,6 +243,26 @@ It preserves the manifest checksum, source identifiers, raw row, and row
 checksum, while leaving source parties, candidates, and geographies unmapped.
 No live IEC download or scheduled vote-total ingestion is enabled.
 
+## Unresolved source identifiers
+
+`scripts/report_iec_unresolved_identifiers.py` lists the distinct
+source-supplied identifiers in `iec_vote_totals` (party, candidate, geography,
+contest) with row counts, vote sums, and provenance:
+
+```bash
+python scripts/report_iec_unresolved_identifiers.py
+```
+
+It writes `reports/iec_unresolved_identifiers.{json,md}`, is unavailable-safe
+if the table is absent, performs **no database writes**, and every grouped
+identifier carries `mapping_status: unresolved`. It creates **no** mapping to
+internal parties/politicians/geographies and infers **no** winners.
+
+**Next reconciliation phase is an explicit source-identifier registry, not
+fuzzy matching.** A future PR should add registry tables keyed on exact
+official IDs and resolve only those; identifiers without an exact official
+match stay unresolved.
+
 ## Issue #24 status
 
 Issue #24 (Ingest IEC election results) remains **open** — the foundation is in
@@ -186,9 +270,8 @@ place but full results ingestion is not complete.
 
 - **Completed:** source discovery, structured-format audit, metadata/source
   manifests, one audited CSV vote-totals parser foundation, coverage quality
-  report, and a manual dry-run workflow.
-- **Pending review:** controlled live-download audit, reviewed-file ingestion
-  workflow, and an unresolved source-identifiers report (open PRs).
+  report, manual dry-run workflow, bounded live-download audit, reviewed-file
+  ingestion workflow, and an unresolved source-identifiers report.
 - **Remaining:** one controlled reviewed real-file ingestion into real vote
   totals with coverage review; multiple official format parsers; historical
   coverage; corrected/revised release handling; explicit source-identifier

@@ -44,9 +44,11 @@ systematically without overreach.
 - IEC election **metadata + source manifests + one audited local CSV
   vote-total profile** (`iec_elections`, `iec_source_manifests`,
   `iec_vote_totals`) via `scripts/ingest_iec_metadata_manifest.py` and
-  `scripts/ingest_iec_vote_totals.py`. There is **no live result workflow,
-  winner/office-holder inference, or internal geography/party/candidate
-  mapping** (see `docs/iec-election-results-ingestion.md`).
+  `scripts/ingest_iec_vote_totals.py`, plus a bounded live-download audit
+  (`scripts/audit_iec_live_downloads.py`) that inspects official downloads
+  without writing rows or committing files. There is **no live result
+  workflow, winner/office-holder inference, or internal geography/party/
+  candidate mapping** (see `docs/iec-election-results-ingestion.md`).
 
 ## 3. Discovery-only areas (no ingestion yet)
 
@@ -93,6 +95,9 @@ schema**:
    before adding larger datasets.
 3. IEC coverage/quality reporting, then a reviewed operator run against an
    official file whose manifest and checksum are already stored (#24).
+   The reconciliation phase after that is an **explicit source-identifier
+   registry** (exact official IDs only — never fuzzy matching), informed by
+   `scripts/report_iec_unresolved_identifiers.py`.
 4. Votes / divisions audit → bounded expansion only where explicit (#7).
 5. Gazette / Acts discovery → bill↔act linkage on explicit identifiers (#25).
 6. Municipal discovery → councils/office-bearers with confirmed terms (#26).
@@ -110,8 +115,6 @@ Issue #24 remains **open**. Full IEC results ingestion is not complete.
   `scripts/ingest_iec_vote_totals.py`) — local/reviewed-file driven only.
 - IEC coverage quality report (`scripts/report_iec_coverage.py`).
 - Manual dry-run workflow (`.github/workflows/iec-ingestion-dry-run.yml`).
-
-**In review (open PRs, not yet merged):**
 - Bounded live-download audit (`scripts/audit_iec_live_downloads.py`).
 - Reviewed-file ingestion workflow
   (`.github/workflows/iec-reviewed-file-ingestion.yml`).
