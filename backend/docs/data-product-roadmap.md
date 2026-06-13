@@ -44,9 +44,11 @@ systematically without overreach.
 - IEC election **metadata + source manifests + one audited local CSV
   vote-total profile** (`iec_elections`, `iec_source_manifests`,
   `iec_vote_totals`) via `scripts/ingest_iec_metadata_manifest.py` and
-  `scripts/ingest_iec_vote_totals.py`. There is **no live result workflow,
-  winner/office-holder inference, or internal geography/party/candidate
-  mapping** (see `docs/iec-election-results-ingestion.md`).
+  `scripts/ingest_iec_vote_totals.py`, plus a bounded live-download audit
+  (`scripts/audit_iec_live_downloads.py`) that inspects official downloads
+  without writing rows or committing files. There is **no live result
+  workflow, winner/office-holder inference, or internal geography/party/
+  candidate mapping** (see `docs/iec-election-results-ingestion.md`).
 
 ## 3. Discovery-only areas (no ingestion yet)
 
