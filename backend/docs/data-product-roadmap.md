@@ -35,6 +35,10 @@ systematically without overreach.
   and unresolved person entities. It remains red until a formal,
   source-backed expected MP universe exists; active database rows are not a
   completeness denominator.
+- **V1 readiness report** (`scripts/report_v1_readiness.py`) - aggregates MP,
+  parliamentary activity, IEC, ingestion-health, PA source-access, and source
+  inventory gates. It stays red when the expected MP universe is missing and
+  never converts absent evidence into a completeness claim.
 
 ## 2. Currently implemented data sources
 
