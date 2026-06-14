@@ -103,6 +103,9 @@ Green means "complete enough for the defined V1," not perfect or universal.
    enrichment, PMG as activity support, and IEC as election context rather
    than current-office authority. Its report remains audit-only:
    `expected_universe_available: false` and `cannot_claim_all_mps: true`.
+   `scripts/profile_parliament_member_sources.py` then profiles official
+   Parliament member-list endpoints only; it does not ingest rows or elevate
+   People's Assembly from enrichment to baseline authority.
 2. Establish an explicit expected representative universe or report that it is
    unavailable.
 3. Publish an MP coverage scoreboard with
