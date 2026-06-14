@@ -109,7 +109,10 @@ Green means "complete enough for the defined V1," not perfect or universal.
    `scripts/report_mp_coverage.py`. It reports stored people/source/activity
    counts and unresolved review candidates, but remains red while the expected
    MP universe is unavailable. It must not claim all MPs.
-4. Aggregate domain reports into a V1 readiness report.
+4. Aggregate domain reports with `scripts/report_v1_readiness.py`. Green is
+   allowed only when every required gate explicitly passes; missing reports,
+   a missing MP universe, foundation-only IEC coverage, and systemic PA access
+   failures remain visible blockers.
 5. Address the resulting blockers in evidence-first PRs.
 
 No fabricated records. Unknown or missing data remains unknown or missing.
