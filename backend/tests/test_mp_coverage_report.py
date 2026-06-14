@@ -126,7 +126,9 @@ def test_readiness_is_red_without_expected_universe():
         report = build_report(db)
     finally:
         db.close()
+    assert report["expected_universe_table_available"] is True
     assert report["expected_universe_available"] is False
+    assert report["expected_representative_count"] == 0
     assert report["cannot_claim_all_mps"] is True
     assert report["missing_expected_representatives"] is None
     assert report["readiness"] == "red"

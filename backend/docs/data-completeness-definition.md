@@ -43,6 +43,13 @@ Until that universe exists, reports must include:
 - `cannot_claim_all_mps: true`;
 - missing/unresolved coverage as unknown rather than zero.
 
+The `expected_representative_universe` table is the evidence contract for that
+future denominator. Table existence alone is insufficient: it must contain
+reviewed source rows, and reconciliation must have no missing, ambiguous, or
+unresolved representatives before `cannot_claim_all_mps` may become false.
+Expected rows are not internal person mappings and do not infer party,
+membership, role, or current-office status.
+
 People's Assembly is enrichment and cross-check evidence. Parliament official
 member sources are the preferred baseline candidates. PMG supports activity
 linkage. IEC election context is not current-office authority unless an

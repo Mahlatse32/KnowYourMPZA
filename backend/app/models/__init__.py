@@ -7,6 +7,7 @@ from app.models.committee_meeting import CommitteeMeeting
 from app.models.committee_membership import CommitteeMembership
 from app.models.document import Document
 from app.models.document_mention import DocumentMention
+from app.models.expected_representative_universe import ExpectedRepresentativeUniverse
 from app.models.iec_election import IECElection
 from app.models.iec_source_manifest import IECSourceManifest
 from app.models.iec_vote_total import IECVoteTotal
@@ -33,6 +34,7 @@ __all__ = [
     "CommitteeMembership",
     "Document",
     "DocumentMention",
+    "ExpectedRepresentativeUniverse",
     "IECElection",
     "IECSourceManifest",
     "IECVoteTotal",

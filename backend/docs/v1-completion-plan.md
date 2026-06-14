@@ -104,7 +104,9 @@ Green means "complete enough for the defined V1," not perfect or universal.
    than current-office authority. Its report remains audit-only:
    `expected_universe_available: false` and `cannot_claim_all_mps: true`.
 2. Establish an explicit expected representative universe or report that it is
-   unavailable.
+   unavailable. The `expected_representative_universe` schema stores only
+   explicit source evidence and has no automatic link to internal politician
+   records. An empty table is still unavailable for completeness claims.
 3. Publish an MP coverage scoreboard with
    `scripts/report_mp_coverage.py`. It reports stored people/source/activity
    counts and unresolved review candidates, but remains red while the expected
