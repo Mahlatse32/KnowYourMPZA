@@ -55,6 +55,33 @@ def _sweep_report(mode="real", exit_code=0, stages=None, delta=None, **overrides
     return base
 
 
+def _pa_summary(systemic=True):
+    """A People's Assembly ingestion summary shaped like build_result output."""
+    return {
+        "source": "people_assembly",
+        "attempted_count": 100,
+        "processed_count": 0,
+        "created_count": 0,
+        "updated_count": 0,
+        "skipped_count": 0,
+        "failed_count": 100,
+        "status": "failed" if systemic else "partial",
+        "systemic_source_access_failure": systemic,
+        "failed_fetch_count": 100 if systemic else 1,
+        "top_error_types": {"HTTPError": 100} if systemic else {"HTTPError": 1},
+        "sample_safe_errors": [
+            {"url": "https://www.pa.org.za/person/1/", "type": "HTTPError",
+             "error": "Source fetch failed from www.pa.org.za: HTTP 403."},
+        ],
+        "recommendation": (
+            "All attempted source fetches failed before parsing (systemic "
+            "source-access failure). Run ingestion from a non-blocked host or network; "
+            "do not repeatedly rerun CI while blocked."
+        ) if systemic else "",
+        "errors": [],
+    }
+
+
 def _inputs(**overrides):
     base = {
         "sweep_report": _sweep_report(),
@@ -278,3 +305,60 @@ def test_readiness_workflow_generates_brief():
 def test_brief_path_is_gitignored():
     assert "reports/" in (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
     assert "reports/" in (REPO_ROOT / "backend" / ".gitignore").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# People's Assembly source-access failure (#47)
+# ---------------------------------------------------------------------------
+
+def test_brief_red_for_systemic_pa_source_access_failure():
+    status, reasons = classify_run(_inputs(people_assembly=_pa_summary()))
+    assert status == "red"
+    assert any("People's Assembly source access failed systemically" in r for r in reasons)
+    # The reason makes clear this is a source-side block, not fabricated/missing data.
+    assert any("not fabricated or missing data" in r for r in reasons)
+
+
+def test_brief_not_red_for_non_systemic_pa_summary():
+    # A non-systemic PA summary must not flip an otherwise-green run.
+    status, _ = classify_run(_inputs(people_assembly=_pa_summary(systemic=False)))
+    assert status == "green"
+
+
+def test_brief_includes_pa_source_access_recommendation():
+    recs = build_recommendations(_inputs(people_assembly=_pa_summary()), "red")
+    assert any("non-blocked host" in r for r in recs)
+    assert any("do not repeatedly rerun ci" in r.lower() for r in recs)
+
+
+def test_brief_renders_source_access_section():
+    brief = build_brief(_inputs(people_assembly=_pa_summary()))
+    assert brief["status"] == "red"
+    assert brief["source_access"]["systemic_source_access_failure"] is True
+    md = render_markdown(brief)
+    assert "## Source access" in md
+    assert "SYSTEMIC SOURCE-ACCESS FAILURE" in md
+    assert "HTTPError" in md
+    assert "www.pa.org.za" in md
+
+
+def test_brief_redacts_raw_secrets_in_source_access_errors():
+    # Feed RAW (unredacted) secrets to prove the brief layer strips them itself —
+    # defense-in-depth, not relying on upstream redaction.
+    summary = _pa_summary()
+    summary["sample_safe_errors"] = [
+        {"url": "https://admin:super-secret-pw@www.pa.org.za/x/", "type": "HTTPError",
+         "error": "connect failed DATABASE_URL=postgresql://u:hunter2@db/app token=ghp_abcdefghijklmnopqrstuvwxyz123456"},
+    ]
+    brief = build_brief(_inputs(people_assembly=summary))
+    for surface in (json.dumps(brief), render_markdown(brief)):
+        assert "super-secret-pw" not in surface
+        assert "hunter2" not in surface
+        assert "ghp_abcdefghijklmnopqrstuvwxyz123456" not in surface
+        assert "[REDACTED]" in surface
+
+
+def test_brief_without_pa_summary_has_null_source_access():
+    brief = build_brief(_inputs())
+    assert brief["source_access"] is None
+    assert "## Source access" not in render_markdown(brief)

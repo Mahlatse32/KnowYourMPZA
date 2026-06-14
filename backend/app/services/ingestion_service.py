@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.ingestion.people_assembly import fetch_page as fetch_people_assembly_page
+from app.ingestion.people_assembly import describe_fetch_failure as describe_people_assembly_fetch_failure
 from app.ingestion.people_assembly import archive_html as archive_people_assembly_html
 from app.ingestion.people_assembly import normalize_committee_name, normalize_party_name, normalize_role
 from app.ingestion.people_assembly import parse_committee_page
@@ -24,6 +25,19 @@ from app.models.politician_alias import PoliticianAlias
 from app.models.source import Source
 from app.models.unresolved_entity import UnresolvedEntity
 from app.services.entity_resolution import alias_values_for_politician, resolve_politician_name
+
+
+class SourceAccessError(Exception):
+    """A source page could not be fetched before parsing.
+
+    Carries a coarse ``error_type`` (e.g. ``HTTPError``, ``Timeout``,
+    ``ConnectionError``, ``EmptyResponse``) so the resilience layer can tell a
+    systemic source-access block apart from a parse or database failure.
+    """
+
+    def __init__(self, message: str, error_type: str = "SourceAccessError") -> None:
+        super().__init__(message)
+        self.error_type = error_type
 
 
 def _one_by(db: Session, model, field_name: str, value):
@@ -326,7 +340,8 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
         try:
             html = fetch_people_assembly_page(url)
             if not html:
-                raise ValueError("Fetch failed or returned empty HTML.")
+                error_type, message = describe_people_assembly_fetch_failure(url)
+                raise SourceAccessError(message, error_type)
             archive_path = archive_people_assembly_html(url, html)
             profile = parse_profile(url, html)
 
@@ -413,7 +428,9 @@ def ingest_people_assembly_profiles(db: Session, urls: list[str]) -> dict:
         except Exception as exc:
             db.rollback()
             summary["failed_count"] += 1
-            summary["errors"].append({"url": url, "error": str(exc)})
+            summary["errors"].append(
+                {"url": url, "type": getattr(exc, "error_type", exc.__class__.__name__), "error": str(exc)}
+            )
         else:
             db.commit()
     return summary
@@ -427,7 +444,8 @@ def ingest_people_assembly_committees(db: Session, urls: list[str]) -> dict:
         try:
             html = fetch_people_assembly_page(url)
             if not html:
-                raise ValueError("Fetch failed or returned empty HTML.")
+                error_type, message = describe_people_assembly_fetch_failure(url)
+                raise SourceAccessError(message, error_type)
             archive_path = archive_people_assembly_html(url, html, "data/raw/people_assembly/committees")
             parsed = parse_committee_page(url, html)
             existing_committee = _one_by(db, Committee, "slug", parsed.slug)
@@ -493,7 +511,9 @@ def ingest_people_assembly_committees(db: Session, urls: list[str]) -> dict:
         except Exception as exc:
             db.rollback()
             summary["failed_count"] += 1
-            summary["errors"].append({"url": url, "error": str(exc)})
+            summary["errors"].append(
+                {"url": url, "type": getattr(exc, "error_type", exc.__class__.__name__), "error": str(exc)}
+            )
         else:
             db.commit()
     return summary
@@ -541,7 +561,9 @@ def ingest_pmg_documents(db: Session, urls: list[str]) -> dict:
         except Exception as exc:
             db.rollback()
             summary["failed_count"] += 1
-            summary["errors"].append({"url": url, "error": str(exc)})
+            summary["errors"].append(
+                {"url": url, "type": getattr(exc, "error_type", exc.__class__.__name__), "error": str(exc)}
+            )
         else:
             db.commit()
     return summary

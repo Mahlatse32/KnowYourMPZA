@@ -91,13 +91,123 @@ class ParsedCommitteePage:
     members: list[ParsedCommitteeMembership]
 
 
-def fetch_page(url: str) -> str:
+@dataclass
+class FetchOutcome:
+    """Safe, structured result of a single source fetch.
+
+    Carries diagnostic metadata for failures without ever exposing the full
+    response body, credentials, query strings, or paths. Only the bare host
+    (``final_domain``), HTTP status code, response content type, and a coarse
+    ``error_kind`` are retained.
+    """
+
+    text: str
+    ok: bool
+    status_code: int | None = None
+    error_kind: str | None = None  # http_error | timeout | connection_error | request_error | empty_body
+    content_type: str | None = None
+    final_domain: str | None = None
+
+
+# Diagnostics from the most recent fetch_page() call, keyed by URL so callers
+# can attribute a failure to the request they just made. Single-threaded
+# ingestion scripts only; never holds response bodies or secrets.
+_LAST_FETCH_OUTCOME: dict[str, FetchOutcome] = {}
+
+# Map fetch error kinds to the error "type" the resilience layer recognizes as
+# a source-access (transient/access) failure rather than a parse/DB failure.
+_ERROR_KIND_TO_TYPE = {
+    "http_error": "HTTPError",
+    "timeout": "Timeout",
+    "connection_error": "ConnectionError",
+    "request_error": "RequestException",
+    "empty_body": "EmptyResponse",
+}
+
+
+def _domain_only(url: str) -> str | None:
+    netloc = urlparse(url).netloc.lower()
+    # netloc may carry credentials/port (user:pass@host:port); keep host only.
+    host = netloc.rsplit("@", 1)[-1].split(":", 1)[0]
+    return host or None
+
+
+def fetch_page_detailed(url: str) -> FetchOutcome:
+    """Fetch a page and return a structured outcome with safe diagnostics.
+
+    Never raises and never returns response bodies on failure. On any error it
+    records the coarse failure kind, HTTP status (if any), response content
+    type, and the bare host, so a systemic source-access block can be told
+    apart from a parse error — without bypassing the source or logging HTML.
+    """
+    domain = _domain_only(url)
     try:
         response = requests.get(url, timeout=15, headers={"User-Agent": "KnowYourMPZA/0.1"})
-        response.raise_for_status()
-        return response.text
+    except requests.Timeout:
+        return _record(url, FetchOutcome("", False, None, "timeout", None, domain))
+    except requests.ConnectionError:
+        return _record(url, FetchOutcome("", False, None, "connection_error", None, domain))
     except requests.RequestException:
-        return ""
+        return _record(url, FetchOutcome("", False, None, "request_error", None, domain))
+
+    domain = _domain_only(response.url) or domain
+    content_type = response.headers.get("Content-Type")
+    status_code = response.status_code
+    try:
+        response.raise_for_status()
+    except requests.HTTPError:
+        return _record(url, FetchOutcome("", False, status_code, "http_error", content_type, domain))
+    if not response.text:
+        return _record(url, FetchOutcome("", False, status_code, "empty_body", content_type, domain))
+    return _record(url, FetchOutcome(response.text, True, status_code, None, content_type, domain))
+
+
+def _record(url: str, outcome: FetchOutcome) -> FetchOutcome:
+    _LAST_FETCH_OUTCOME[url] = outcome
+    return outcome
+
+
+def last_fetch_outcome(url: str) -> FetchOutcome | None:
+    """Return the recorded diagnostics for the most recent fetch of ``url``."""
+    return _LAST_FETCH_OUTCOME.get(url)
+
+
+def describe_fetch_failure(url: str) -> tuple[str, str]:
+    """Return ``(error_type, safe_message)`` for a failed fetch of ``url``.
+
+    The message names the failure kind, HTTP status, content type, and bare
+    host only — no credentials, query strings, paths, or response body. Falls
+    back to a generic message when no diagnostics were recorded (e.g. the
+    fetch function was monkeypatched in tests).
+    """
+    outcome = _LAST_FETCH_OUTCOME.get(url)
+    if outcome is None or outcome.ok:
+        return "SourceAccessError", "Fetch failed or returned empty HTML."
+    error_type = _ERROR_KIND_TO_TYPE.get(outcome.error_kind or "", "SourceAccessError")
+    domain = outcome.final_domain or "the source"
+    parts: list[str] = []
+    if outcome.error_kind == "http_error":
+        parts.append(f"HTTP {outcome.status_code}" if outcome.status_code else "HTTP error")
+    elif outcome.error_kind == "timeout":
+        parts.append("request timed out")
+    elif outcome.error_kind == "connection_error":
+        parts.append("connection failed")
+    elif outcome.error_kind == "empty_body":
+        parts.append(f"empty body (HTTP {outcome.status_code})" if outcome.status_code else "empty body")
+    else:
+        parts.append("request failed")
+    if outcome.content_type and outcome.error_kind in {"http_error", "empty_body"}:
+        parts.append(f"content-type {outcome.content_type}")
+    return error_type, f"Source fetch failed from {domain}: {', '.join(parts)}."
+
+
+def fetch_page(url: str) -> str:
+    """Fetch a page, returning its text or ``""`` on any failure.
+
+    Backwards-compatible string contract. Failure diagnostics are recorded and
+    retrievable via :func:`last_fetch_outcome` / :func:`describe_fetch_failure`.
+    """
+    return fetch_page_detailed(url).text
 
 
 def normalize_people_assembly_url(url: str) -> str:

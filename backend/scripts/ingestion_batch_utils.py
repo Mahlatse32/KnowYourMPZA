@@ -28,6 +28,20 @@ TRANSIENT_ERROR_TYPES = {
     "RequestException",
     "Timeout",
 }
+# Error types that mean a page could not be fetched *before* parsing — i.e. a
+# source-access failure (block, challenge, timeout, unreachable host, empty
+# body), as opposed to a parse error or a database failure.
+SOURCE_ACCESS_ERROR_TYPES = TRANSIENT_ERROR_TYPES | {"EmptyResponse", "SourceAccessError"}
+SOURCE_ACCESS_RECOMMENDATION = (
+    "All attempted source fetches failed before parsing (systemic source-access "
+    "failure). The source host most likely blocked or challenged this runner, or "
+    "is unreachable from it — not a data-quality regression, and no records were "
+    "fabricated. Run ingestion from a non-blocked host or network; do not "
+    "repeatedly rerun CI while blocked; use a descriptive, contactable "
+    "User-Agent only if the source operator approves. Keep the failure visible "
+    "until source access is restored."
+)
+SAMPLE_SAFE_ERROR_LIMIT = 3
 TRANSIENT_MESSAGE_PARTS = (
     "429",
     "500",
@@ -84,7 +98,47 @@ def build_result(source: str, attempted_count: int, summary: dict, systemic_fail
         "errors": [normalize_error(error) for error in summary.get("errors", [])],
     }
     result["status"] = _status(result, systemic_failure)
+    _annotate_source_access(result)
     return result
+
+
+def _annotate_source_access(result: dict) -> None:
+    """Add observability fields describing *why* a run failed.
+
+    Distinguishes a systemic source-access failure (every attempted item failed
+    to fetch before parsing) from parse/database failures, and surfaces safe,
+    aggregated diagnostics. All values are derived from already-redacted errors.
+    """
+    errors = result.get("errors", [])
+    error_types = [error.get("type", "IngestionError") for error in errors]
+
+    top_error_types: dict[str, int] = {}
+    for error_type in error_types:
+        top_error_types[error_type] = top_error_types.get(error_type, 0) + 1
+
+    failed_fetch_count = sum(1 for error_type in error_types if error_type in SOURCE_ACCESS_ERROR_TYPES)
+
+    attempted = int(result.get("attempted_count", 0) or 0)
+    processed = int(result.get("processed_count", 0) or 0)
+    failed = int(result.get("failed_count", 0) or 0)
+    has_database_failure = any(error_type in SYSTEMIC_ERROR_TYPES for error_type in error_types)
+    # Systemic source-access failure: something was attempted, nothing was
+    # processed, every failure is a fetch/access error, and none is a database
+    # failure. Partial success (processed > 0) is never systemic.
+    systemic_source_access_failure = bool(
+        attempted > 0
+        and processed == 0
+        and failed >= attempted
+        and bool(errors)
+        and not has_database_failure
+        and all(error_type in SOURCE_ACCESS_ERROR_TYPES for error_type in error_types)
+    )
+
+    result["systemic_source_access_failure"] = systemic_source_access_failure
+    result["failed_fetch_count"] = failed_fetch_count
+    result["top_error_types"] = top_error_types
+    result["sample_safe_errors"] = errors[:SAMPLE_SAFE_ERROR_LIMIT]
+    result["recommendation"] = SOURCE_ACCESS_RECOMMENDATION if systemic_source_access_failure else ""
 
 
 def discovery_failure(source: str, exc: Exception) -> dict:
