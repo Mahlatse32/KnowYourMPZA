@@ -105,7 +105,10 @@ Green means "complete enough for the defined V1," not perfect or universal.
    `expected_universe_available: false` and `cannot_claim_all_mps: true`.
 2. Establish an explicit expected representative universe or report that it is
    unavailable.
-3. Publish an MP coverage scoreboard without claiming all MPs.
+3. Publish an MP coverage scoreboard with
+   `scripts/report_mp_coverage.py`. It reports stored people/source/activity
+   counts and unresolved review candidates, but remains red while the expected
+   MP universe is unavailable. It must not claim all MPs.
 4. Aggregate domain reports into a V1 readiness report.
 5. Address the resulting blockers in evidence-first PRs.
 

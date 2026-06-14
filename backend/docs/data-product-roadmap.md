@@ -30,6 +30,11 @@ systematically without overreach.
 - **IEC coverage report** (`scripts/report_iec_coverage.py`) - manifest and
   vote-total integrity, unresolved source identifiers, and conservative
   red/yellow/green readiness without winner or office-holder inference.
+- **MP coverage scoreboard** (`scripts/report_mp_coverage.py`) - direct
+  source-URL coverage, PA profiles, PMG activity links, duplicate-like names,
+  and unresolved person entities. It remains red until a formal,
+  source-backed expected MP universe exists; active database rows are not a
+  completeness denominator.
 
 ## 2. Currently implemented data sources
 
