@@ -1,0 +1,71 @@
+{
+  "sources": [
+    {
+      "source_name": "Parliament National Assembly members",
+      "source_url": "https://www.parliament.gov.za/national-assembly/members",
+      "source_owner": "Parliament of the Republic of South Africa",
+      "representative_scope": "National Assembly",
+      "officialness": "official",
+      "expected_fields": ["person name", "party", "role", "house/chamber", "contact/profile URL"],
+      "risks": ["HTML fields require parser validation."],
+      "recommended_use": "baseline authority"
+    },
+    {
+      "source_name": "People's Assembly members of Parliament",
+      "source_url": "https://www.pa.org.za/position/member/parliament/",
+      "source_owner": "People's Assembly",
+      "representative_scope": "National Assembly",
+      "officialness": "civic/enrichment",
+      "expected_fields": ["person name", "party", "role", "contact/profile URL"],
+      "risks": ["Must not be the sole current-office authority."],
+      "recommended_use": "enrichment"
+    },
+    {
+      "source_name": "PMG committee meeting API",
+      "source_url": "https://api.pmg.org.za/committee-meeting/",
+      "source_owner": "Parliamentary Monitoring Group",
+      "representative_scope": "unknown",
+      "officialness": "supporting",
+      "source_type": "api",
+      "expected_fields": ["person name", "role", "contact/profile URL"],
+      "risks": ["Activity evidence is not a complete membership universe."],
+      "recommended_use": "activity link"
+    },
+    {
+      "source_name": "IEC election context",
+      "source_url": "https://results.elections.org.za/",
+      "source_owner": "Electoral Commission of South Africa",
+      "representative_scope": "unknown",
+      "officialness": "official",
+      "expected_fields": ["person name", "party", "province"],
+      "risks": ["Election context is not current-office evidence."],
+      "recommended_use": "not safe yet"
+    }
+  ],
+  "responses": [
+    {
+      "url": "https://www.parliament.gov.za/national-assembly/members",
+      "status": 200,
+      "content_type": "text/html",
+      "ok": true
+    },
+    {
+      "url": "https://www.pa.org.za/position/member/parliament/",
+      "status": 200,
+      "content_type": "text/html",
+      "ok": true
+    },
+    {
+      "url": "https://api.pmg.org.za/committee-meeting/",
+      "status": 200,
+      "content_type": "application/json",
+      "ok": true
+    },
+    {
+      "url": "https://results.elections.org.za/",
+      "status": 403,
+      "content_type": "text/html",
+      "ok": false
+    }
+  ]
+}

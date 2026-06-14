@@ -97,7 +97,12 @@ Green means "complete enough for the defined V1," not perfect or universal.
 
 ## Immediate completion sequence
 
-1. Audit authoritative MP/member source candidates.
+1. Audit authoritative MP/member source candidates with
+   `scripts/audit_mp_member_sources.py`. The audit classifies Parliament
+   official member listings as baseline candidates, People's Assembly as
+   enrichment, PMG as activity support, and IEC as election context rather
+   than current-office authority. Its report remains audit-only:
+   `expected_universe_available: false` and `cannot_claim_all_mps: true`.
 2. Establish an explicit expected representative universe or report that it is
    unavailable.
 3. Publish an MP coverage scoreboard without claiming all MPs.
