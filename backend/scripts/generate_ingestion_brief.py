@@ -29,6 +29,7 @@ credential-redacted, and this script adds no environment values.
 import argparse
 import json
 import logging
+import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -53,6 +54,7 @@ def load_inputs(reports_dir: Path) -> dict:
         "coverage": "full_coverage_report.json",
         "completeness": "search_completeness_report.json",
         "readiness": "db_readiness.json",
+        "people_assembly": "people_assembly_ingestion_summary.json",
     }
     inputs: dict = {}
     for key, filename in names.items():
@@ -116,6 +118,15 @@ def _advancement(inputs: dict) -> tuple[int, int]:
     return advanced, total
 
 
+def _source_access_failure(inputs: dict) -> dict | None:
+    """Return the People's Assembly summary when it is a systemic source-access
+    failure (every attempted fetch failed before parsing), else None."""
+    summary = inputs.get("people_assembly")
+    if isinstance(summary, dict) and summary.get("systemic_source_access_failure"):
+        return summary
+    return None
+
+
 def classify_run(inputs: dict) -> tuple[str, list[str]]:
     """Deterministic green / yellow / red with reasons."""
     reasons: list[str] = []
@@ -125,6 +136,16 @@ def classify_run(inputs: dict) -> tuple[str, list[str]]:
 
     red = False
     yellow = False
+
+    source_access = _source_access_failure(inputs)
+    if source_access is not None:
+        red = True
+        reasons.append(
+            "People's Assembly source access failed systemically "
+            f"({source_access.get('failed_fetch_count', 0)}/"
+            f"{source_access.get('attempted_count', 0)} fetches failed before parsing) — "
+            "this is a source-side block/unreachability, not fabricated or missing data"
+        )
 
     if readiness is not None and not readiness.get("ready", False):
         red = True
@@ -192,6 +213,10 @@ def build_recommendations(inputs: dict, status: str) -> list[str]:
     coverage_pct = (report or {}).get("estimated_meeting_coverage_percent")
     counts = (report or {}).get("counts_after") or {}
     errors = _errors(inputs)
+
+    source_access = _source_access_failure(inputs)
+    if source_access is not None and source_access.get("recommendation"):
+        recs.append(source_access["recommendation"])
 
     readiness_says_no_url = readiness is not None and any(
         c["name"] == "url_present" and c["status"] == "fail" for c in readiness.get("checks", [])
@@ -274,6 +299,59 @@ def _top_new_records(inputs: dict, limit: int = 5) -> list[dict]:
     return top
 
 
+def _redact(value: str) -> str:
+    """Defense-in-depth credential redaction for the brief layer.
+
+    Upstream summaries are already credential-redacted; this re-applies the same
+    rules so the brief never surfaces a secret even if an upstream stage forgot
+    to. Mirrors scripts/ingestion_batch_utils.redact_sensitive."""
+    text = str(value)
+    text = re.sub(
+        r"(?i)\b(database_url|password|passwd|secret|token|api_key|authorization)\b"
+        r"(\s*[:=]\s*)([^\s,;]+)",
+        r"\1\2[REDACTED]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s:@]+):([^@\s/]+)@",
+        r"\1[REDACTED]:[REDACTED]@",
+        text,
+    )
+    text = re.sub(
+        r"\b(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})\b",
+        "[REDACTED]",
+        text,
+    )
+    return text
+
+
+def _redact_error(error: dict) -> dict:
+    if not isinstance(error, dict):
+        return error
+    return {key: (_redact(value) if isinstance(value, str) else value) for key, value in error.items()}
+
+
+def _source_access_section(inputs: dict) -> dict | None:
+    """Safe, aggregated People's Assembly fetch health for the brief. Returns
+    None when no PA summary is present. Carries no response bodies or secrets —
+    the underlying summary is already credential-redacted, and the sample errors
+    are re-redacted here as defense-in-depth."""
+    summary = inputs.get("people_assembly")
+    if not isinstance(summary, dict):
+        return None
+    sample_errors = [_redact_error(error) for error in (summary.get("sample_safe_errors") or [])]
+    return {
+        "source": summary.get("source", "people_assembly"),
+        "status": summary.get("status"),
+        "attempted_count": summary.get("attempted_count"),
+        "failed_fetch_count": summary.get("failed_fetch_count"),
+        "systemic_source_access_failure": bool(summary.get("systemic_source_access_failure")),
+        "top_error_types": summary.get("top_error_types") or {},
+        "sample_safe_errors": sample_errors,
+        "recommendation": summary.get("recommendation") or "",
+    }
+
+
 def build_brief(inputs: dict) -> dict:
     status, reasons = classify_run(inputs)
     report = inputs.get("sweep_report") or {}
@@ -302,6 +380,7 @@ def build_brief(inputs: dict) -> dict:
             "source_totals": report.get("source_totals") or {},
         },
         "top_new_records": _top_new_records(inputs),
+        "source_access": _source_access_section(inputs),
         "errors": _errors(inputs),
         "completeness": _completeness_summary(inputs),
         "attention_required": build_attention_items(inputs, status, reasons),
@@ -363,6 +442,21 @@ def render_markdown(brief: dict) -> str:
         lines += ["## Failures / errors", ""]
         for e in brief["errors"][:10]:
             lines.append(f"- `{e.get('type', '?')}` {e.get('url', '')}: {str(e.get('error', ''))[:160]}")
+        lines.append("")
+
+    sa = brief.get("source_access")
+    if sa:
+        lines += ["## Source access", ""]
+        flag = "🔴 SYSTEMIC SOURCE-ACCESS FAILURE" if sa.get("systemic_source_access_failure") else (sa.get("status") or "unknown")
+        lines.append(f"- **People's Assembly fetch status:** {flag}")
+        lines.append(f"- **Failed fetches:** {sa.get('failed_fetch_count', 0)} / {sa.get('attempted_count', '—')}")
+        if sa.get("top_error_types"):
+            types = ", ".join(f"{name}×{count}" for name, count in sorted(sa["top_error_types"].items()))
+            lines.append(f"- **Error types:** {types}")
+        for err in sa.get("sample_safe_errors", [])[:3]:
+            lines.append(f"  - `{err.get('type', '?')}` {err.get('url', '')}: {str(err.get('error', ''))[:160]}")
+        if sa.get("recommendation"):
+            lines.append(f"- **Recommendation:** {sa['recommendation']}")
         lines.append("")
     if brief.get("completeness"):
         c = brief["completeness"]
