@@ -378,6 +378,31 @@ def test_sweep_failed_run_does_not_advance(db, patched_sessionlocal):
         assert state.last_status == "failed"
 
 
+def test_failed_sweep_leaves_only_that_stream_cursor_unchanged(db, patched_sessionlocal):
+    other = get_or_create_sweep_state(db, "PMG", "pmg_committee_meetings")
+    other.page_number = 9
+    db.commit()
+
+    def timeout_core(db, start_page, max_pages):
+        return {
+            **OK_SUMMARY,
+            "start_page": start_page,
+            "pages_attempted": 0,
+            "failed": 1,
+            "created": 0,
+            "errors": [{"url": "https://api.pmg.org.za/bill/?page=0", "error": "timed out", "type": "Timeout"}],
+        }
+
+    s = execute_with_optional_sweep(_args(), stream_name="pmg_bills", run_core=timeout_core, run_type="t")
+    assert s["sweep"]["advanced"] is False
+    with patched_sessionlocal() as check:
+        bills = get_or_create_sweep_state(check, "PMG", "pmg_bills")
+        meetings = get_or_create_sweep_state(check, "PMG", "pmg_committee_meetings")
+        assert bills.page_number == 0
+        assert bills.last_status == "failed"
+        assert meetings.page_number == 9
+
+
 def test_sweep_end_reached_wraps(db, patched_sessionlocal):
     ended = {**OK_SUMMARY, "pages_attempted": 1, "end_reached": True}
     s = execute_with_optional_sweep(_args(), stream_name="pmg_bills", run_core=_core([ended]), run_type="t")
