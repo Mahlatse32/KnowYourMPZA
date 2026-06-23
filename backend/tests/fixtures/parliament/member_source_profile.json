@@ -1,0 +1,30 @@
+{
+  "sources": [
+    {
+      "source_url": "https://www.parliament.gov.za/national-assembly/members",
+      "chamber": "National Assembly",
+      "source_owner": "Parliament of the Republic of South Africa"
+    },
+    {
+      "source_url": "https://www.pa.org.za/position/member/parliament/",
+      "chamber": "National Assembly",
+      "source_owner": "People's Assembly"
+    }
+  ],
+  "responses": [
+    {
+      "url": "https://www.parliament.gov.za/national-assembly/members",
+      "ok": true,
+      "status_code": 200,
+      "content_type": "text/html",
+      "body": "<html><body><h1>National Assembly Members</h1><table><th>Full Name</th><th>Political Party</th><th>Position</th><th>Contact</th></table></body></html>"
+    },
+    {
+      "url": "https://www.pa.org.za/position/member/parliament/",
+      "ok": true,
+      "status_code": 200,
+      "content_type": "text/html",
+      "body": "<html><body><h1>Members</h1><p>Full Name Party Profile</p></body></html>"
+    }
+  ]
+}
