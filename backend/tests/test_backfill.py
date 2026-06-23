@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 
 import pytest
+import requests
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -13,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from app.db import Base
 from app.ingestion.bills import (
     bill_detail_api_url,
+    fetch_page,
     parse_bill_history,
     parse_pmg_api_bill,
     parse_pmg_api_bill_events,
@@ -204,6 +206,60 @@ def test_backfill_failure_is_not_fatal(db, seeded_bill):
     summary = run_backfill(db, dry_run=False, sleep=0, fetch=broken_fetch)
     assert summary["failed"] == 1
     assert summary["events_created"] == 0
+
+
+def test_backfill_bill_timeout_is_not_fatal(db, seeded_bill):
+    second = upsert_bill(
+        db,
+        {
+            "title": "Second History Bill",
+            "bill_number": "B2",
+            "year": 2025,
+            "house": "National Assembly",
+            "status": "introduced",
+            "source_url": "https://pmg.org.za/bills/history-second/",
+            "source_type": "pmg",
+            "events": [],
+        },
+    )
+    db.commit()
+
+    def fetch(url):
+        if url == seeded_bill.source_url:
+            raise requests.Timeout("timed out")
+        return BILL_HISTORY_HTML
+
+    summary = run_backfill(db, dry_run=False, sleep=0, fetch=fetch)
+    assert summary["failed"] == 1
+    assert summary["errors"][0]["type"] == "Timeout"
+    assert summary["events_created"] == 3
+    events = list(db.scalars(select(BillEvent).where(BillEvent.bill_id == second.id)))
+    assert len(events) == 3
+
+
+def test_fetch_page_retries_transient_timeout(monkeypatch):
+    calls = []
+    sleeps = []
+
+    class Response:
+        text = '{"ok": true}'
+
+        def raise_for_status(self):
+            return None
+
+    def get(url, *, timeout, headers):
+        calls.append({"url": url, "timeout": timeout, "headers": headers})
+        if len(calls) == 1:
+            raise requests.Timeout("slow")
+        return Response()
+
+    monkeypatch.setattr("app.ingestion.bills.requests.get", get)
+    monkeypatch.setattr("app.ingestion.bills.time.sleep", lambda delay: sleeps.append(delay))
+
+    assert fetch_page("https://api.pmg.org.za/bill/?page=1") == '{"ok": true}'
+    assert len(calls) == 2
+    assert calls[0]["timeout"] == 45
+    assert sleeps == [1.0]
 
 
 # ---------------------------------------------------------------------------
