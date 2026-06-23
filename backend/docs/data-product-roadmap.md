@@ -39,6 +39,11 @@ systematically without overreach.
   parliamentary activity, IEC, ingestion-health, PA source-access, and source
   inventory gates. It stays red when the expected MP universe is missing and
   never converts absent evidence into a completeness claim.
+- **Expected representative universe schema**
+  (`expected_representative_universe`) - provenance-rich expected rows with no
+  automatic politician mapping. The empty schema does not change readiness;
+  reviewed official-source rows and conservative reconciliation are still
+  required.
 
 ## 2. Currently implemented data sources
 

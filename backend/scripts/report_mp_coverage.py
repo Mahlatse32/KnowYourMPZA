@@ -12,15 +12,9 @@ from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.models.document_mention import DocumentMention
+from app.models.expected_representative_universe import ExpectedRepresentativeUniverse
 from app.models.politician import Politician
 from app.models.unresolved_entity import UnresolvedEntity
-
-
-EXPECTED_UNIVERSE_TABLES = {
-    "expected_representatives",
-    "expected_mp_universe",
-    "mp_expected_universe",
-}
 
 
 def _blank(column):
@@ -59,8 +53,15 @@ def _unavailable_report(reason: str) -> dict:
         "possible_duplicate_names": None,
         "unresolved_aliases": None,
         "missing_expected_representatives": None,
+        "expected_representative_count": None,
+        "expected_representatives_by_chamber": {},
+        "expected_representatives_by_party": {},
+        "expected_missing_from_people_records": None,
+        "people_records_not_in_expected_universe": None,
         "source_coverage_by_source": {},
+        "expected_universe_table_available": False,
         "expected_universe_available": False,
+        "reconciliation_checks_passed": False,
         "cannot_claim_all_mps": True,
         "readiness": "red",
         "blockers": [
@@ -84,7 +85,7 @@ def build_report(db) -> dict:
     if Politician.__tablename__ not in table_names:
         return _unavailable_report("The politicians table is unavailable.")
 
-    expected_universe_available = bool(table_names & EXPECTED_UNIVERSE_TABLES)
+    expected_table_available = ExpectedRepresentativeUniverse.__tablename__ in table_names
     mentions_available = DocumentMention.__tablename__ in table_names
     unresolved_available = UnresolvedEntity.__tablename__ in table_names
 
@@ -139,22 +140,84 @@ def build_report(db) -> dict:
             if unresolved_available
             else None
         )
+        expected_count = (
+            _count(db, ExpectedRepresentativeUniverse)
+            if expected_table_available
+            else None
+        )
+        expected_by_chamber = (
+            {
+                str(name): int(count)
+                for name, count in db.execute(
+                    select(ExpectedRepresentativeUniverse.chamber, func.count()).group_by(
+                        ExpectedRepresentativeUniverse.chamber
+                    )
+                ).all()
+            }
+            if expected_table_available
+            else {}
+        )
+        expected_by_party = (
+            {
+                str(name) if name else "unknown": int(count)
+                for name, count in db.execute(
+                    select(ExpectedRepresentativeUniverse.party_name, func.count()).group_by(
+                        ExpectedRepresentativeUniverse.party_name
+                    )
+                ).all()
+            }
+            if expected_table_available
+            else {}
+        )
+        people_names = select(func.lower(func.trim(Politician.full_name)))
+        expected_names = select(
+            func.lower(func.trim(ExpectedRepresentativeUniverse.full_name))
+        )
+        expected_missing = (
+            _count(
+                db,
+                ExpectedRepresentativeUniverse,
+                ~func.lower(func.trim(ExpectedRepresentativeUniverse.full_name)).in_(
+                    people_names
+                ),
+            )
+            if expected_table_available and expected_count
+            else None
+        )
+        people_not_expected = (
+            _count(
+                db,
+                Politician,
+                ~func.lower(func.trim(Politician.full_name)).in_(expected_names),
+            )
+            if expected_table_available and expected_count
+            else None
+        )
     except SQLAlchemyError:
         db.rollback()
         return _unavailable_report("MP coverage queries could not be completed safely.")
 
+    expected_universe_available = bool(expected_table_available and expected_count)
+    reconciliation_passes = False
     blockers = []
     recommendations = []
-    if not expected_universe_available:
+    if not expected_table_available:
         blockers.append(
             "No formal source-backed expected MP universe table exists, so missing representatives cannot be calculated."
         )
         recommendations.append(
             "Create a reviewed expected-representative universe from authoritative Parliament sources."
         )
+    elif not expected_universe_available:
+        blockers.append(
+            "The expected representative universe table exists but contains no source-backed rows."
+        )
+        recommendations.append(
+            "Populate it only from a reviewed official-source fixture before reconciliation."
+        )
     else:
         blockers.append(
-            "An expected-universe table exists, but its reconciliation contract is not yet implemented in this report."
+            "Expected-universe reconciliation is not yet implemented as a reviewed report gate."
         )
         recommendations.append(
             "Define and test the expected-universe reconciliation contract before making completeness claims."
@@ -181,7 +244,12 @@ def build_report(db) -> dict:
         "records_with_parliament_source": parliament_profiles,
         "possible_duplicate_names": duplicate_names,
         "unresolved_aliases": unresolved_aliases,
-        "missing_expected_representatives": None,
+        "missing_expected_representatives": expected_missing,
+        "expected_representative_count": expected_count,
+        "expected_representatives_by_chamber": expected_by_chamber,
+        "expected_representatives_by_party": expected_by_party,
+        "expected_missing_from_people_records": expected_missing,
+        "people_records_not_in_expected_universe": people_not_expected,
         "source_coverage_by_source": {
             "people_assembly_profile": pa_profiles,
             "parliament_profile": parliament_profiles,
@@ -189,9 +257,15 @@ def build_report(db) -> dict:
             "missing_profile_source": without_source,
             "pmg_activity": pmg_activity,
         },
+        "expected_universe_table_available": expected_table_available,
         "expected_universe_available": expected_universe_available,
-        "cannot_claim_all_mps": True,
-        "readiness": "red" if not expected_universe_available else "amber",
+        "reconciliation_checks_passed": reconciliation_passes,
+        "cannot_claim_all_mps": not reconciliation_passes,
+        "readiness": (
+            "red"
+            if not expected_universe_available
+            else ("green" if reconciliation_passes else "amber")
+        ),
         "blockers": blockers,
         "recommendations": recommendations,
         "methodology": [
@@ -233,6 +307,9 @@ def render_markdown(report: dict) -> str:
         ("Possible duplicate names", "possible_duplicate_names"),
         ("Unresolved aliases/entities", "unresolved_aliases"),
         ("Missing expected representatives", "missing_expected_representatives"),
+        ("Expected representative rows", "expected_representative_count"),
+        ("Expected rows missing from people", "expected_missing_from_people_records"),
+        ("People rows not in expected universe", "people_records_not_in_expected_universe"),
     ):
         lines.append(f"- {label}: {display(report[key])}")
     lines.extend(["", "## Source coverage", ""])
