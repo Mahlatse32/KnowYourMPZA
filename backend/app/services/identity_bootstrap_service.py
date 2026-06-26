@@ -322,17 +322,15 @@ def _link_memberships_from_attendance(db: Session, summary: dict[str, int]) -> N
 def _link_questions(db: Session, summary: dict[str, int]) -> None:
     politician_index = _politician_index(db)
     questions = db.scalars(
-        select(ParliamentaryQuestion).where(
-            ParliamentaryQuestion.politician_id.is_(None),
-            ParliamentaryQuestion.asked_by_name.is_not(None),
-            ParliamentaryQuestion.asked_by_name != "",
-        )
+        select(ParliamentaryQuestion).where(ParliamentaryQuestion.politician_id.is_(None))
     )
     for question in questions:
         unique_mention = _unique_question_mention_politician(db, question)
         if unique_mention is not None:
             question.politician_id = unique_mention.id
             summary["questions_linked"] += 1
+            continue
+        if not question.asked_by_name:
             continue
         politician = _resolve_from_index(
             politician_index,
