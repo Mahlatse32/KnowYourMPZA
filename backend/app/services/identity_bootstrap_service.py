@@ -184,7 +184,13 @@ def _bootstrap_committees(db: Session, summary: dict[str, int]) -> None:
 
 
 def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str, int]) -> None:
-    candidates: dict[str, tuple[str, str | None, Party]] = {}
+    candidates: dict[str, tuple[str, str | None, object | None]] = {}
+    parties_by_id = {party.id: party for party in db.scalars(select(Party))}
+    politicians_by_slug = {politician.slug: politician for politician in db.scalars(select(Politician))}
+    existing_alias_keys = {
+        (alias.politician_id, alias.alias)
+        for alias in db.scalars(select(PoliticianAlias))
+    }
 
     attendance_rows = db.execute(
         select(CommitteeAttendance.name_raw, CommitteeAttendance.source_url, CommitteeAttendance.party_id)
@@ -195,8 +201,7 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
         name = normalize_pmg_person_name(raw_name or "")
         if not name:
             continue
-        party = db.get(Party, party_id) if party_id else None
-        candidates.setdefault(create_slug(name), (name, source_url, party or unknown_party))
+        candidates.setdefault(create_slug(name), (name, source_url, parties_by_id.get(party_id) or unknown_party))
 
     question_rows = db.execute(
         select(ParliamentaryQuestion.asked_by_name, func.min(ParliamentaryQuestion.source_url))
@@ -210,7 +215,7 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
         candidates.setdefault(create_slug(name), (name, source_url, unknown_party))
 
     for slug, (name, source_url, party) in sorted(candidates.items()):
-        politician = db.scalar(select(Politician).where(Politician.slug == slug))
+        politician = politicians_by_slug.get(slug)
         if politician is None:
             politician = Politician(
                 full_name=name,
@@ -224,6 +229,7 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
             )
             db.add(politician)
             db.flush()
+            politicians_by_slug[slug] = politician
             summary["politicians_created"] += 1
         else:
             if politician.party_id is None:
@@ -234,7 +240,7 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
                 politician.source_status = PMG_DERIVED_STATUS
             politician.source_last_seen_at = datetime.now(UTC)
             summary["politicians_updated"] += 1
-        summary["aliases_created"] += _ensure_aliases(db, politician, source_url)
+        summary["aliases_created"] += _ensure_aliases(db, politician, source_url, existing_alias_keys)
 
 
 def _link_meetings(db: Session, summary: dict[str, int]) -> None:
@@ -386,16 +392,21 @@ def _ensure_question_mention(
     return True
 
 
-def _ensure_aliases(db: Session, politician: Politician, source_url: str | None) -> int:
+def _ensure_aliases(
+    db: Session,
+    politician: Politician,
+    source_url: str | None,
+    existing_alias_keys: set[tuple] | None = None,
+) -> int:
+    if existing_alias_keys is None:
+        existing_alias_keys = {
+            (alias.politician_id, alias.alias)
+            for alias in db.scalars(select(PoliticianAlias))
+        }
     created = 0
     for alias, alias_type in alias_values_for_politician(politician):
-        existing = db.scalar(
-            select(PoliticianAlias).where(
-                PoliticianAlias.politician_id == politician.id,
-                PoliticianAlias.alias == alias,
-            )
-        )
-        if existing is None:
+        key = (politician.id, alias)
+        if key not in existing_alias_keys:
             db.add(
                 PoliticianAlias(
                     politician=politician,
@@ -404,13 +415,16 @@ def _ensure_aliases(db: Session, politician: Politician, source_url: str | None)
                     source_url=source_url,
                 )
             )
+            existing_alias_keys.add(key)
             created += 1
     return created
 
 
 def _politician_index(db: Session) -> dict[str, Politician]:
     index: dict[str, Politician] = {}
-    for politician in db.scalars(select(Politician)):
+    politicians = list(db.scalars(select(Politician)))
+    politicians_by_id = {politician.id: politician for politician in politicians}
+    for politician in politicians:
         for value in (politician.full_name, politician.display_name, politician.slug):
             if value:
                 index.setdefault(value.lower(), politician)
@@ -419,7 +433,9 @@ def _politician_index(db: Session) -> dict[str, Politician]:
             index.setdefault(create_slug(normalized), politician)
     for alias in db.scalars(select(PoliticianAlias)):
         if alias.alias and alias.alias_type != "SURNAME_ONLY":
-            index.setdefault(alias.alias.lower(), alias.politician)
+            politician = politicians_by_id.get(alias.politician_id)
+            if politician is not None:
+                index.setdefault(alias.alias.lower(), politician)
     return index
 
 
