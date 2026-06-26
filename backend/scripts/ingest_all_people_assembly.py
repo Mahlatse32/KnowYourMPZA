@@ -16,6 +16,7 @@ from scripts.ingestion_batch_utils import (
     should_fail,
     systemic_failure,
 )
+from scripts.identity_bootstrap_utils import run_pmg_identity_bootstrap
 
 
 def main() -> int:
@@ -63,6 +64,21 @@ def main() -> int:
         emit_result(result, "people_assembly_ingestion_summary.json")
         return 1
     result = build_result("people_assembly", len(urls), total, systemic)
+    if result.get("systemic_source_access_failure"):
+        try:
+            with SessionLocal() as db:
+                result["fallback"] = {
+                    "strategy": "pmg_identity_bootstrap",
+                    "summary": run_pmg_identity_bootstrap(db),
+                }
+                result["status"] = "fallback_completed"
+        except Exception as exc:
+            result["fallback"] = {
+                "strategy": "pmg_identity_bootstrap",
+                "status": "failed",
+                "error_type": exc.__class__.__name__,
+                "error": str(exc),
+            }
     emit_result(result, "people_assembly_ingestion_summary.json")
     return 1 if should_fail(result) else 0
 
