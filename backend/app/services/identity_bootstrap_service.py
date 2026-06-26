@@ -94,6 +94,7 @@ def bootstrap_identities_from_pmg(db: Session) -> dict[str, int]:
     db.flush()
     _link_meetings(db, summary)
     _link_attendance(db, summary)
+    _link_memberships_from_attendance(db, summary)
     _link_questions(db, summary)
     _link_vote_events(db, summary)
     db.commit()
@@ -250,11 +251,29 @@ def _link_meetings(db: Session, summary: dict[str, int]) -> None:
         .where(CommitteeMeeting.committee_id.is_(None), Document.committee_name.is_not(None))
     )
     for meeting, raw_committee_name in rows:
-        committee = _resolve_committee(db, raw_committee_name)
-        if committee is None:
-            continue
-        meeting.committee_id = committee.id
-        summary["meetings_linked"] += 1
+        _link_meeting_to_committee(db, meeting, raw_committee_name, summary)
+
+    rows = db.execute(
+        select(CommitteeMeeting, Document.committee_name)
+        .join(Document, CommitteeMeeting.source_url == Document.source_url)
+        .where(
+            CommitteeMeeting.committee_id.is_(None),
+            CommitteeMeeting.source_url.is_not(None),
+            Document.committee_name.is_not(None),
+        )
+    )
+    for meeting, raw_committee_name in rows:
+        _link_meeting_to_committee(db, meeting, raw_committee_name, summary)
+
+
+def _link_meeting_to_committee(db: Session, meeting: CommitteeMeeting, raw_committee_name: str | None, summary: dict[str, int]) -> None:
+    if meeting.committee_id is not None:
+        return
+    committee = _resolve_committee(db, raw_committee_name)
+    if committee is None:
+        return
+    meeting.committee_id = committee.id
+    summary["meetings_linked"] += 1
 
 
 def _link_attendance(db: Session, summary: dict[str, int]) -> None:
@@ -280,6 +299,26 @@ def _link_attendance(db: Session, summary: dict[str, int]) -> None:
                 summary["memberships_created"] += 1
 
 
+def _link_memberships_from_attendance(db: Session, summary: dict[str, int]) -> None:
+    membership_keys = {
+        (membership.politician_id, membership.committee_id, membership.role)
+        for membership in db.scalars(select(CommitteeMembership))
+    }
+    rows = db.scalars(
+        select(CommitteeAttendance)
+        .join(CommitteeMeeting, CommitteeAttendance.meeting_id == CommitteeMeeting.id)
+        .where(
+            CommitteeAttendance.politician_id.is_not(None),
+            CommitteeMeeting.committee_id.is_not(None),
+        )
+    )
+    for record in rows:
+        if record.politician is None or record.meeting.committee is None:
+            continue
+        if _ensure_membership(db, record.politician, record.meeting.committee, record.source_url, membership_keys):
+            summary["memberships_created"] += 1
+
+
 def _link_questions(db: Session, summary: dict[str, int]) -> None:
     politician_index = _politician_index(db)
     questions = db.scalars(
@@ -290,6 +329,11 @@ def _link_questions(db: Session, summary: dict[str, int]) -> None:
         )
     )
     for question in questions:
+        unique_mention = _unique_question_mention_politician(db, question)
+        if unique_mention is not None:
+            question.politician_id = unique_mention.id
+            summary["questions_linked"] += 1
+            continue
         politician = _resolve_from_index(
             politician_index,
             normalize_pmg_person_name(question.asked_by_name or "") or question.asked_by_name or "",
@@ -304,6 +348,19 @@ def _link_questions(db: Session, summary: dict[str, int]) -> None:
 
 def _link_vote_events(db: Session, summary: dict[str, int]) -> None:
     from app.models.vote_event import VoteEvent
+
+    rows = db.execute(
+        select(VoteEvent, CommitteeMeeting.committee_id)
+        .join(CommitteeMeeting, VoteEvent.source_url == CommitteeMeeting.source_url)
+        .where(
+            VoteEvent.committee_id.is_(None),
+            VoteEvent.source_url.is_not(None),
+            CommitteeMeeting.committee_id.is_not(None),
+        )
+    )
+    for event, committee_id in rows:
+        event.committee_id = committee_id
+        summary["vote_events_linked"] += 1
 
     committees = sorted(
         list(db.scalars(select(Committee).where(Committee.name.is_not(None)))),
@@ -363,6 +420,19 @@ def _ensure_membership(
     )
     membership_keys.add(key)
     return True
+
+
+def _unique_question_mention_politician(db: Session, question: ParliamentaryQuestion) -> Politician | None:
+    politician_ids = list(
+        db.scalars(
+            select(QuestionMention.politician_id)
+            .where(QuestionMention.question_id == question.id)
+            .distinct()
+        )
+    )
+    if len(politician_ids) != 1:
+        return None
+    return db.get(Politician, politician_ids[0])
 
 
 def _ensure_question_mention(
@@ -448,6 +518,10 @@ def _resolve_from_index(index: dict[str, Politician], raw_name: str) -> Politici
 
 def normalize_pmg_person_name(value: str) -> str | None:
     clean = " ".join(str(value).replace("\xa0", " ").split()).strip(" ,.;:-")
+    if not clean:
+        return None
+    clean = re.sub(r"\([^)]*\)", " ", clean)
+    clean = " ".join(clean.split()).strip(" ,.;:-")
     if not clean:
         return None
     lowered = clean.lower()
