@@ -24,7 +24,7 @@ from app.models.politician import Politician
 from app.models.politician_alias import PoliticianAlias
 from app.models.question_mention import QuestionMention
 from app.models.source import Source
-from app.services.entity_resolution import alias_values_for_politician, resolve_politician_name
+from app.services.entity_resolution import alias_values_for_politician
 
 PMG_SOURCE_NAME = "PMG"
 PMG_DERIVED_STATUS = "PMG_DERIVED"
@@ -252,24 +252,30 @@ def _link_meetings(db: Session, summary: dict[str, int]) -> None:
 
 
 def _link_attendance(db: Session, summary: dict[str, int]) -> None:
+    politician_index = _politician_index(db)
+    membership_keys = {
+        (membership.politician_id, membership.committee_id, membership.role)
+        for membership in db.scalars(select(CommitteeMembership))
+    }
     rows = db.scalars(
         select(CommitteeAttendance)
         .join(CommitteeMeeting, CommitteeAttendance.meeting_id == CommitteeMeeting.id)
         .where(CommitteeAttendance.politician_id.is_(None))
     )
     for record in rows:
-        resolution = resolve_politician_name(db, normalize_pmg_person_name(record.name_raw) or record.name_raw)
-        if resolution is None:
+        politician = _resolve_from_index(politician_index, normalize_pmg_person_name(record.name_raw) or record.name_raw)
+        if politician is None:
             continue
-        record.politician_id = resolution.politician.id
-        record.confidence = max(record.confidence or 0, resolution.confidence_score)
+        record.politician_id = politician.id
+        record.confidence = max(record.confidence or 0, 0.99)
         summary["attendance_linked"] += 1
         if record.meeting.committee_id:
-            if _ensure_membership(db, resolution.politician, record.meeting.committee, record.source_url):
+            if _ensure_membership(db, politician, record.meeting.committee, record.source_url, membership_keys):
                 summary["memberships_created"] += 1
 
 
 def _link_questions(db: Session, summary: dict[str, int]) -> None:
+    politician_index = _politician_index(db)
     questions = db.scalars(
         select(ParliamentaryQuestion).where(
             ParliamentaryQuestion.politician_id.is_(None),
@@ -278,12 +284,15 @@ def _link_questions(db: Session, summary: dict[str, int]) -> None:
         )
     )
     for question in questions:
-        resolution = resolve_politician_name(db, normalize_pmg_person_name(question.asked_by_name or "") or question.asked_by_name or "")
-        if resolution is None:
+        politician = _resolve_from_index(
+            politician_index,
+            normalize_pmg_person_name(question.asked_by_name or "") or question.asked_by_name or "",
+        )
+        if politician is None:
             continue
-        question.politician_id = resolution.politician.id
+        question.politician_id = politician.id
         summary["questions_linked"] += 1
-        if _ensure_question_mention(db, question, resolution.politician, resolution.confidence_score):
+        if _ensure_question_mention(db, question, politician, 0.99):
             summary["question_mentions_created"] += 1
 
 
@@ -326,18 +335,15 @@ def _resolve_committee(db: Session, raw_name: str | None) -> Committee | None:
     )
 
 
-def _ensure_membership(db: Session, politician: Politician, committee: Committee, source_url: str | None) -> bool:
-    existing = db.scalar(
-        select(CommitteeMembership).where(
-            CommitteeMembership.politician_id == politician.id,
-            CommitteeMembership.committee_id == committee.id,
-            CommitteeMembership.role == "Member",
-        )
-    )
-    if existing is not None:
-        if source_url and not existing.source_url:
-            existing.source_url = source_url
-        existing.source_last_seen_at = datetime.now(UTC)
+def _ensure_membership(
+    db: Session,
+    politician: Politician,
+    committee: Committee,
+    source_url: str | None,
+    membership_keys: set[tuple],
+) -> bool:
+    key = (politician.id, committee.id, "Member")
+    if key in membership_keys:
         return False
     db.add(
         CommitteeMembership(
@@ -349,6 +355,7 @@ def _ensure_membership(db: Session, politician: Politician, committee: Committee
             source_status=PMG_DERIVED_STATUS,
         )
     )
+    membership_keys.add(key)
     return True
 
 
@@ -399,6 +406,28 @@ def _ensure_aliases(db: Session, politician: Politician, source_url: str | None)
             )
             created += 1
     return created
+
+
+def _politician_index(db: Session) -> dict[str, Politician]:
+    index: dict[str, Politician] = {}
+    for politician in db.scalars(select(Politician)):
+        for value in (politician.full_name, politician.display_name, politician.slug):
+            if value:
+                index.setdefault(value.lower(), politician)
+        normalized = normalize_pmg_person_name(politician.full_name)
+        if normalized:
+            index.setdefault(create_slug(normalized), politician)
+    for alias in db.scalars(select(PoliticianAlias)):
+        if alias.alias and alias.alias_type != "SURNAME_ONLY":
+            index.setdefault(alias.alias.lower(), alias.politician)
+    return index
+
+
+def _resolve_from_index(index: dict[str, Politician], raw_name: str) -> Politician | None:
+    value = " ".join(raw_name.strip().split())
+    if not value:
+        return None
+    return index.get(value.lower()) or index.get(create_slug(value))
 
 
 def normalize_pmg_person_name(value: str) -> str | None:
