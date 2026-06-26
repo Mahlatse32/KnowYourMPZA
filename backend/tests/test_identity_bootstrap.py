@@ -15,6 +15,7 @@ from app.models.parliamentary_question import ParliamentaryQuestion
 from app.models.politician import Politician
 from app.models.question_mention import QuestionMention
 from app.models.source import Source
+from app.models.vote_event import VoteEvent
 from app.services.identity_bootstrap_service import (
     bootstrap_identities_from_pmg,
     estimate_pmg_identity_bootstrap_attempts,
@@ -92,6 +93,14 @@ def test_pmg_identity_bootstrap_creates_and_links_identities_idempotently(db):
             source_url="https://www.parliament.gov.za/question/bootstrap-nw1",
         )
     )
+    db.add(
+        VoteEvent(
+            title="Portfolio Committee on Energy adopted report",
+            date=date(2026, 1, 21),
+            vote_type="committee_decision",
+            source_url="https://pmg.org.za/vote/bootstrap-energy",
+        )
+    )
     db.commit()
 
     assert estimate_pmg_identity_bootstrap_attempts(db) == 3
@@ -103,11 +112,13 @@ def test_pmg_identity_bootstrap_creates_and_links_identities_idempotently(db):
     committee = db.scalar(select(Committee).where(Committee.slug == "energy"))
     attendance = db.scalar(select(CommitteeAttendance).where(CommitteeAttendance.name_raw == "Dlamini, Ms A"))
     question = db.scalar(select(ParliamentaryQuestion).where(ParliamentaryQuestion.question_number == "NW1"))
+    vote_event = db.scalar(select(VoteEvent).where(VoteEvent.source_url == "https://pmg.org.za/vote/bootstrap-energy"))
 
     assert first["politicians_created"] == 1
     assert first["committees_created"] == 1
     assert first["attendance_linked"] == 1
     assert first["questions_linked"] == 1
+    assert first["vote_events_linked"] == 1
     assert first["memberships_created"] == 1
     assert second["politicians_created"] == 0
     assert second["committees_created"] == 0
@@ -117,6 +128,7 @@ def test_pmg_identity_bootstrap_creates_and_links_identities_idempotently(db):
     assert meeting.committee_id == committee.id
     assert attendance.politician_id == politician.id
     assert question.politician_id == politician.id
+    assert vote_event.committee_id == committee.id
 
     assert db.scalar(select(Politician).where(Politician.slug == "a-dlamini")).id == politician.id
     assert len(list(db.scalars(select(Committee).where(Committee.slug == "energy")))) == 1

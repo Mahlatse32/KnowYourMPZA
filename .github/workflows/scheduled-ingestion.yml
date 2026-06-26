@@ -131,7 +131,12 @@ jobs:
 
       - run: pip install -r requirements.txt
       - run: alembic upgrade head
+      - name: Verify PMG identity bootstrap
+        run: python scripts/verify_identity_bootstrap_production.py --run-bootstrap --output reports/identity_bootstrap_before_after.json || true
       - run: python scripts/run_weekly_ingestion.py
+      - name: Verify identity links after weekly maintenance
+        if: always()
+        run: python scripts/verify_identity_bootstrap_production.py --output reports/identity_bootstrap_after_weekly.json || true
 
       - name: Inspect database
         if: always()

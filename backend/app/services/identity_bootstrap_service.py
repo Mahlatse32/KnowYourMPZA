@@ -80,6 +80,7 @@ def bootstrap_identities_from_pmg(db: Session) -> dict[str, int]:
         "memberships_created": 0,
         "questions_linked": 0,
         "question_mentions_created": 0,
+        "vote_events_linked": 0,
     }
 
     _, source_created = _ensure_pmg_source(db)
@@ -94,6 +95,7 @@ def bootstrap_identities_from_pmg(db: Session) -> dict[str, int]:
     _link_meetings(db, summary)
     _link_attendance(db, summary)
     _link_questions(db, summary)
+    _link_vote_events(db, summary)
     db.commit()
     return summary
 
@@ -283,6 +285,31 @@ def _link_questions(db: Session, summary: dict[str, int]) -> None:
         summary["questions_linked"] += 1
         if _ensure_question_mention(db, question, resolution.politician, resolution.confidence_score):
             summary["question_mentions_created"] += 1
+
+
+def _link_vote_events(db: Session, summary: dict[str, int]) -> None:
+    from app.models.vote_event import VoteEvent
+
+    committees = sorted(
+        list(db.scalars(select(Committee).where(Committee.name.is_not(None)))),
+        key=lambda committee: len(committee.name or ""),
+        reverse=True,
+    )
+    if not committees:
+        return
+
+    for event in db.scalars(select(VoteEvent).where(VoteEvent.committee_id.is_(None))):
+        title = (event.title or "").lower()
+        if not title:
+            continue
+        for committee in committees:
+            name = (committee.name or "").lower()
+            normalized = normalize_committee_name(committee.name or "").lower()
+            candidates = [candidate for candidate in {name, normalized} if len(candidate) >= 4]
+            if any(candidate in title for candidate in candidates):
+                event.committee_id = committee.id
+                summary["vote_events_linked"] += 1
+                break
 
 
 def _resolve_committee(db: Session, raw_name: str | None) -> Committee | None:

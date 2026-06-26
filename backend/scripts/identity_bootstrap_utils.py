@@ -40,6 +40,7 @@ def run_pmg_identity_bootstrap(db) -> dict:
         + result["meetings_linked"]
         + result["attendance_linked"]
         + result["questions_linked"]
+        + result["vote_events_linked"]
     )
     finish_ingestion_run(
         db,
