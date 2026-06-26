@@ -15,6 +15,7 @@ class CommitteeMeeting(Base):
     committee_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("committees.id"), nullable=True, index=True
     )
+    committee_name: Mapped[str | None] = mapped_column(String(500), nullable=True, index=True)
     title: Mapped[str] = mapped_column(String(500), nullable=False, index=True)
     date: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)

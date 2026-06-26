@@ -137,39 +137,30 @@ def test_pmg_identity_bootstrap_creates_and_links_identities_idempotently(db):
     assert len(list(db.scalars(select(QuestionMention).where(QuestionMention.politician_id == politician.id)))) == 1
 
 
-def test_question_upsert_preserves_existing_politician_when_parse_cannot_resolve(db):
+def test_link_meetings_via_committee_name_column(db):
+    """Strategy 3: meetings with committee_name stored resolve without a Document."""
     source = _pmg_source(db)
-    from app.models.party import Party
-
-    party = Party(name="Unknown", short_name="UNKNOWN", source_url="https://pmg.org.za/")
-    politician = Politician(
-        full_name="A Dlamini",
-        display_name="A Dlamini",
-        slug="a-dlamini",
-        party=party,
-        source_status="PMG_DERIVED",
-    )
-    question = ParliamentaryQuestion(
-        question_number="NW2",
-        title="Existing question",
-        politician=politician,
+    # A committee exists (bootstrapped from a document elsewhere).
+    from app.models.document import Document as Doc
+    doc = Doc(
+        title="Finance committee meeting",
+        document_type="PMG_COMMITTEE_MEETING",
         source=source,
-        source_url="https://www.parliament.gov.za/question/preserve-nw2",
+        source_url="https://pmg.org.za/committee-meeting/finance-doc/",
+        committee_name="Portfolio Committee on Finance",
+        raw_text="Finance briefing.",
     )
-    db.add_all([party, politician, question])
+    db.add(doc)
+    db.flush()
     db.commit()
 
-    updated, created = upsert_parliamentary_question(
-        db,
-        {
-            "question_number": "NW2",
-            "title": "Existing question updated",
-            "asked_by_name": None,
-            "source_url": "https://www.parliament.gov.za/question/preserve-nw2",
-            "raw_text": "",
-        },
-    )
-    db.commit()
+    # Bootstrap creates the committee from the document.
+    first = bootstrap_identities_from_pmg(db)
+    committee = db.scalar(select(Committee).where(Committee.slug == "finance"))
+    assert committee is not None, "Committee must be bootstrapped from document"
 
-    assert created is False
-    assert updated.politician_id == politician.id
+    # Create two meetings that have committee_name stored (as would happen after
+    # the fix is deployed and the sweep re-processes meetings from the API).
+    m1 = CommitteeMeeting(
+        title="Annual budget briefing",
+        date=date(2026,

@@ -245,6 +245,7 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
 
 
 def _link_meetings(db: Session, summary: dict[str, int]) -> None:
+    # Strategy 1: meeting has a summary_document_id whose document carries committee_name.
     rows = db.execute(
         select(CommitteeMeeting, Document.committee_name)
         .join(Document, CommitteeMeeting.summary_document_id == Document.id)
@@ -253,6 +254,7 @@ def _link_meetings(db: Session, summary: dict[str, int]) -> None:
     for meeting, raw_committee_name in rows:
         _link_meeting_to_committee(db, meeting, raw_committee_name, summary)
 
+    # Strategy 2: meeting source_url matches a document source_url that carries committee_name.
     rows = db.execute(
         select(CommitteeMeeting, Document.committee_name)
         .join(Document, CommitteeMeeting.source_url == Document.source_url)
@@ -264,6 +266,58 @@ def _link_meetings(db: Session, summary: dict[str, int]) -> None:
     )
     for meeting, raw_committee_name in rows:
         _link_meeting_to_committee(db, meeting, raw_committee_name, summary)
+
+    # Strategy 3: meeting has committee_name stored directly (from API ingestion).
+    # This column was added by migration 0014; pre-existing rows will have NULL.
+    for meeting in db.scalars(
+        select(CommitteeMeeting).where(
+            CommitteeMeeting.committee_id.is_(None),
+            CommitteeMeeting.committee_name.is_not(None),
+        )
+    ):
+        _link_meeting_to_committee(db, meeting, meeting.committee_name, summary)
+
+    # Strategy 4: title-based extraction for remaining unlinked meetings.
+    # Handles titles like "Portfolio Committee on Finance: Budget Vote 8" where
+    # the committee name precedes the first colon, and substring matches for
+    # titles that embed a known committee name.
+    unlinked = list(
+        db.scalars(
+            select(CommitteeMeeting).where(CommitteeMeeting.committee_id.is_(None))
+        )
+    )
+    if not unlinked:
+        return
+    committees = sorted(
+        db.scalars(select(Committee).where(Committee.name.is_not(None))).all(),
+        key=lambda c: len(c.name or ""),
+        reverse=True,
+    )
+    if not committees:
+        return
+    for meeting in unlinked:
+        title = (meeting.title or "").strip()
+        if not title:
+            continue
+        # Try the text before the first colon as a committee name candidate.
+        if ":" in title:
+            candidate = title.split(":", 1)[0].strip()
+            if len(candidate) >= 4:
+                committee = _resolve_committee(db, candidate)
+                if committee is not None:
+                    meeting.committee_id = committee.id
+                    summary["meetings_linked"] += 1
+                    continue
+        # Substring match: check if any known committee name appears in the title.
+        title_lower = title.lower()
+        for committee in committees:
+            name = (committee.name or "").lower()
+            normalized = normalize_committee_name(committee.name or "").lower()
+            candidates = [c for c in {name, normalized} if len(c) >= 6]
+            if any(c in title_lower for c in candidates):
+                meeting.committee_id = committee.id
+                summary["meetings_linked"] += 1
+                break
 
 
 def _link_meeting_to_committee(db: Session, meeting: CommitteeMeeting, raw_committee_name: str | None, summary: dict[str, int]) -> None:
