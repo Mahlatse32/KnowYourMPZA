@@ -16,6 +16,7 @@ from app.models.politician import Politician
 from app.models.question_mention import QuestionMention
 from app.models.source import Source
 from app.models.vote_event import VoteEvent
+from app.ingestion.parliament_questions import upsert_parliamentary_question
 from app.services.identity_bootstrap_service import (
     bootstrap_identities_from_pmg,
     estimate_pmg_identity_bootstrap_attempts,
@@ -134,3 +135,41 @@ def test_pmg_identity_bootstrap_creates_and_links_identities_idempotently(db):
     assert len(list(db.scalars(select(Committee).where(Committee.slug == "energy")))) == 1
     assert len(list(db.scalars(select(CommitteeMembership).where(CommitteeMembership.politician_id == politician.id)))) == 1
     assert len(list(db.scalars(select(QuestionMention).where(QuestionMention.politician_id == politician.id)))) == 1
+
+
+def test_question_upsert_preserves_existing_politician_when_parse_cannot_resolve(db):
+    source = _pmg_source(db)
+    from app.models.party import Party
+
+    party = Party(name="Unknown", short_name="UNKNOWN", source_url="https://pmg.org.za/")
+    politician = Politician(
+        full_name="A Dlamini",
+        display_name="A Dlamini",
+        slug="a-dlamini",
+        party=party,
+        source_status="PMG_DERIVED",
+    )
+    question = ParliamentaryQuestion(
+        question_number="NW2",
+        title="Existing question",
+        politician=politician,
+        source=source,
+        source_url="https://www.parliament.gov.za/question/preserve-nw2",
+    )
+    db.add_all([party, politician, question])
+    db.commit()
+
+    updated, created = upsert_parliamentary_question(
+        db,
+        {
+            "question_number": "NW2",
+            "title": "Existing question updated",
+            "asked_by_name": None,
+            "source_url": "https://www.parliament.gov.za/question/preserve-nw2",
+            "raw_text": "",
+        },
+    )
+    db.commit()
+
+    assert created is False
+    assert updated.politician_id == politician.id

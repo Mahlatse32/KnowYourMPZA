@@ -108,10 +108,11 @@ def upsert_parliamentary_question(db: Session, parsed: dict) -> tuple[Parliament
     existing = db.scalars(
         select(ParliamentaryQuestion).where(ParliamentaryQuestion.source_url == parsed["source_url"])
     ).first()
+    resolved_politician = resolution.politician if resolution else (existing.politician if existing else None)
     payload = {
         "question_number": parsed.get("question_number"),
         "title": parsed.get("title"),
-        "politician": resolution.politician if resolution else None,
+        "politician": resolved_politician,
         "asked_by_name": parsed.get("asked_by_name"),
         "department": parsed.get("department"),
         "minister": parsed.get("minister"),
@@ -150,6 +151,16 @@ def upsert_parliamentary_question(db: Session, parsed: dict) -> tuple[Parliament
 
     for politician, snippet, confidence, reason in _detect_question_mentions(db, parsed.get("raw_text") or ""):
         _upsert_question_mention(db, question, politician, parsed.get("raw_text") or "", politician.display_name, confidence, reason, snippet)
+    if question.politician_id is None:
+        politician_ids = list(
+            db.scalars(
+                select(QuestionMention.politician_id)
+                .where(QuestionMention.question_id == question.id)
+                .distinct()
+            )
+        )
+        if len(politician_ids) == 1:
+            question.politician_id = politician_ids[0]
     return question, created
 
 
