@@ -112,7 +112,8 @@ def test_backfill_workflow_shares_sweep_concurrency_group():
 
 
 def test_backfill_workflow_has_timeout():
-    assert "timeout-minutes:" in BACKFILL_WORKFLOW.read_text(encoding="utf-8")
+    text = BACKFILL_WORKFLOW.read_text(encoding="utf-8")
+    assert "timeout-minutes: 90" in text
 
 
 def test_backfill_workflow_targets_only_meetings_stream():
