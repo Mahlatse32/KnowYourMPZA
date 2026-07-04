@@ -21,6 +21,7 @@ The production identity blocker is closed: production has non-zero politicians a
 - [x] PMG scheduler sweep states show cursor safety and completed runs.
 - [ ] PMG committee meeting coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
 - [ ] Parliament question coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
+  - 2026-07-04 diagnosis: source access is working, but scheduled ingestion was spending its `50` URL daily limit on already-ingested docsjson URLs. The backfill path now prioritizes newly discovered question URLs before refreshing existing records.
 - [ ] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
@@ -54,7 +55,7 @@ Source: scheduled ingestion run `28697697822`, `main`, completed successfully on
 |---|---:|---:|---:|---|
 | PMG bills | 1171 | 1246 | 93.98% | acceptable for V1 |
 | PMG committee meetings | 3416 | 34710 | 9.84% | blocker |
-| Parliament question records | 139 | 44036 | 0.32% | blocker |
+| Parliament question records | 139 | 44036 | 0.32% | blocker; new-record-first backfill fix in progress |
 
 ## Identity Link Coverage
 

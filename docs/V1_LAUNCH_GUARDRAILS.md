@@ -39,7 +39,7 @@ For every launch-relevant PR:
 ## Current No-Merge Risks
 
 - PMG committee meeting coverage is only `3416/34710` in the latest production report.
-- Parliament question coverage is only `139/44036` in the latest production report.
+- Parliament question coverage is only `139/44036` in the latest production report. The known ingestion risk is repeated refresh of already-ingested docsjson URLs; fixes must preserve source URLs, PDF archiving, idempotent upserts, and soft failure reporting.
 - People's Assembly production fetches have shown systemic HTTP 403 failures; fallback is required.
 - Local worktree currently contains unrelated unstaged deletions and untracked artifacts; do not include them in launch PRs.
 
