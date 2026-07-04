@@ -21,13 +21,16 @@ The production identity blocker is closed: production has non-zero politicians a
 - [x] Scheduled daily ingestion succeeds on `main`.
 - [x] PMG scheduler sweep states show cursor safety and completed runs.
 - [ ] PMG committee meeting coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
+  - 2026-07-04 diagnosis: nothing is failing — throughput is structurally capped. The daily accountability sweep advances every stream by `pages_per_run=3` pages (150 meetings/day) against a ~695-page source (34,710 meetings), so the cursor at page 70 is exactly on schedule and 80% coverage would take ~160 more days. Fix: a dedicated `pmg-meeting-backfill` workflow sweeps only the `pmg_committee_meetings` stream every 2 hours at the existing 10-page safety cap (~6,000 meetings/day capacity, ~4–5 days to 80%), sharing the daily sweep's concurrency group and cursor so runs never overlap. The meetings fetcher also gains the same 45s-timeout/exponential-backoff behavior as the bills fetcher.
 - [ ] Parliament question coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
   - 2026-07-04 diagnosis: source access is working, but scheduled ingestion was spending its `50` URL daily limit on already-ingested docsjson URLs. The backfill path now prioritizes newly discovered question URLs before refreshing existing records.
-- [ ] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
+- [x] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
+  - 2026-07-04: PA is formally enrichment-only for V1 with PMG as identity authority; the automatic PMG identity bootstrap fallback, recovery criteria, and operational runbook are documented in `docs/PEOPLES_ASSEMBLY_FALLBACK.md`.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
   - 2026-07-04: `backend/scripts/smoke_test_frontend_api.py` now exercises every endpoint the frontend calls, requires non-empty core datasets, and runs daily in scheduled ingestion against the production database via `--start-local-server`, writing `frontend_smoke_report.json`/`.md` into the artifacts. Tick this gate when the first scheduled artifact reports `overall_status=pass`.
-- [ ] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
+- [x] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
+  - 2026-07-04: `backend/scripts/check_data_quality.py` runs all six check families with pass/warn/fail thresholds, writes `data_quality_checks.json`/`.md` into the scheduled report artifacts (daily and weekly), and exits non-zero on failure for manual gating. Documented in `docs/DATA_QUALITY_CHECKS.md`.
 
 ## Latest Production Counts
 
@@ -56,7 +59,7 @@ Source: scheduled ingestion run `28697697822`, `main`, completed successfully on
 | Dataset | Production count | Source denominator | Coverage | Launch status |
 |---|---:|---:|---:|---|
 | PMG bills | 1171 | 1246 | 93.98% | acceptable for V1 |
-| PMG committee meetings | 3416 | 34710 | 9.84% | blocker |
+| PMG committee meetings | 3416 | 34710 | 9.84% | blocker; dedicated 2-hourly backfill workflow in progress |
 | Parliament question records | 139 | 44036 | 0.32% | blocker; new-record-first backfill fix in progress |
 
 ## Identity Link Coverage
