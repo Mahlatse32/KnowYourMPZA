@@ -26,7 +26,8 @@ The production identity blocker is closed: production has non-zero politicians a
   - 2026-07-04 diagnosis: source access is working, but scheduled ingestion was spending its `50` URL daily limit on already-ingested docsjson URLs. The backfill path now prioritizes newly discovered question URLs before refreshing existing records.
 - [x] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
   - 2026-07-04: PA is formally enrichment-only for V1 with PMG as identity authority; the automatic PMG identity bootstrap fallback, recovery criteria, and operational runbook are documented in `docs/PEOPLES_ASSEMBLY_FALLBACK.md`.
-- [ ] Full backend test suite passes in a production-equivalent environment.
+- [x] Full backend test suite passes in a production-equivalent environment.
+  - 2026-07-04: CI runs the full backend suite (`pytest -q`) against a PostgreSQL 16 service with `alembic upgrade head` applied — the same engine/migration path as production. Evidence: CI run `28705501325` on `main` (post PR #60/#61 merge) completed successfully on 2026-07-04, as did every `main` CI run this week. The known local-only failure mode (32 tests needing a PostgreSQL at 127.0.0.1) does not apply in CI.
 - [ ] Frontend production-data smoke test passes.
   - 2026-07-04: `backend/scripts/smoke_test_frontend_api.py` now exercises every endpoint the frontend calls, requires non-empty core datasets, and runs daily in scheduled ingestion against the production database via `--start-local-server`, writing `frontend_smoke_report.json`/`.md` into the artifacts. Tick this gate when the first scheduled artifact reports `overall_status=pass`.
 - [x] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
