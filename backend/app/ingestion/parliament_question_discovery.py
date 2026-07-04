@@ -37,14 +37,23 @@ def discover_parliamentary_question_urls(
     return sorted(discovered)
 
 
+_DOCSJSON_PER_PAGE = 50
+# Consecutive batches that add no new URLs before a doc type is abandoned.
+# Protects against a source that repeats the same window regardless of offset.
+_DOCSJSON_MAX_STALE_BATCHES = 2
+
+
 def discover_docsjson_urls(limit: int | None = None, year: int | None = None) -> list[str]:
     urls: set[str] = set()
     for doc_type in DOC_TYPES:
-        page = 1
-        while True:
-            records = _docsjson_records(doc_type, page=page, per_page=50)
+        offset = 0
+        stale_batches = 0
+        max_requests = 20 if limit is None else (limit // _DOCSJSON_PER_PAGE) * 3 + 10
+        for _ in range(max_requests):
+            records = _docsjson_records(doc_type, offset=offset, per_page=_DOCSJSON_PER_PAGE)
             if not records:
                 break
+            before = len(urls)
             for record in records:
                 url = _record_file_url(record)
                 if not url:
@@ -55,21 +64,29 @@ def discover_docsjson_urls(limit: int | None = None, year: int | None = None) ->
                 urls.add(url)
                 if limit and len(urls) >= limit:
                     return sorted(urls)
-            if len(records) < 50:
+            # The docsjson endpoint ignores the documented `page` parameter and
+            # only advances via `offset`. If a window adds nothing new, the
+            # source is repeating itself (or everything normalized to known
+            # URLs) — give up on this doc type instead of looping forever.
+            if len(urls) == before:
+                stale_batches += 1
+                if stale_batches >= _DOCSJSON_MAX_STALE_BATCHES:
+                    break
+            else:
+                stale_batches = 0
+            if len(records) < _DOCSJSON_PER_PAGE:
                 break
-            page += 1
-            if page > 20 and limit is None:
-                break
+            offset += len(records)
     return sorted(urls)
 
 
-def _docsjson_records(doc_type: str, page: int, per_page: int) -> list[dict]:
+def _docsjson_records(doc_type: str, offset: int, per_page: int) -> list[dict]:
     try:
         response = requests.get(
             f"https://www.parliament.gov.za/docsjson/{doc_type}",
             params={
                 "queries[type]": doc_type,
-                "page": page,
+                "offset": offset,
                 "perPage": per_page,
                 "sorts[date]": -1,
             },
