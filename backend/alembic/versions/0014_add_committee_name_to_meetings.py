@@ -1,6 +1,6 @@
 """add committee_name to committee_meetings
 
-Revision ID: 0014_add_committee_name_to_meetings
+Revision ID: 0014_committee_names
 Revises: 0013_expected_universe
 Create Date: 2026-06-26 00:00:00.000000
 
@@ -13,7 +13,7 @@ from typing import Sequence, Union
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0014_add_committee_name_to_meetings"
+revision: str = "0014_committee_names"
 down_revision: Union[str, None] = "0013_expected_universe"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
