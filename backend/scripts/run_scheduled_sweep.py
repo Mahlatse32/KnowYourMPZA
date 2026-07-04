@@ -53,10 +53,41 @@ ACCOUNTABILITY_TABLES = [
     "committee_attendance",
 ]
 
+# Sweep stream -> the run_full_ingestion.py flag that skips it. A --streams
+# allowlist runs ONLY the named streams by skipping every other one, so all
+# streams keep sharing the same cursor rows and sweep guards.
+STREAM_SKIP_FLAGS = {
+    "pmg_bills": "--skip-bill-sweep",
+    "pmg_bill_lifecycle_backfill": "--skip-bill-lifecycle-sweep",
+    "pmg_committee_meetings": "--skip-committee-meeting-sweep",
+    "pmg_votes_from_meetings": "--skip-vote-sweep",
+}
+
 
 class SweepConfigError(Exception):
     """Raised when a scheduled sweep is misconfigured. The message is safe to
     print (never contains secrets)."""
+
+
+def parse_streams(raw: str | None) -> list[str] | None:
+    """Parse a comma-separated stream allowlist; None/empty means all streams."""
+    if not raw:
+        return None
+    streams = [s.strip() for s in raw.split(",") if s.strip()]
+    return streams or None
+
+
+def stream_selection_args(streams: list[str] | None) -> list[str]:
+    """Map a stream allowlist to run_full_ingestion.py --skip-* flags."""
+    if not streams:
+        return []
+    unknown = sorted(set(streams) - set(STREAM_SKIP_FLAGS))
+    if unknown:
+        raise SweepConfigError(
+            f"Unknown sweep stream(s): {', '.join(unknown)}. "
+            f"Known streams: {', '.join(STREAM_SKIP_FLAGS)}."
+        )
+    return [flag for stream, flag in STREAM_SKIP_FLAGS.items() if stream not in streams]
 
 
 def validate_sweep_config(
@@ -261,6 +292,9 @@ def main() -> None:
     parser.add_argument("--allow-large-batch", action="store_true", help=f"Override the pages_per_run cap of {DEFAULT_PAGES_CAP}.")
     parser.add_argument("--assume-persistent-db", action="store_true",
                         help="Assert that DATABASE_URL points at a persistent database (for hosts that own their DB).")
+    parser.add_argument("--streams", default=None,
+                        help="Comma-separated allowlist of sweep streams to run "
+                             f"(default: all). Known: {', '.join(STREAM_SKIP_FLAGS)}.")
     parser.add_argument("--reports-dir", default=str(REPORTS_DIR))
     args = parser.parse_args()
 
@@ -275,13 +309,16 @@ def main() -> None:
             db_persistent=db_persistent,
             allow_large_batch=args.allow_large_batch,
         )
+        streams = parse_streams(args.streams)
+        stream_args = stream_selection_args(streams)
     except SweepConfigError as exc:
         logger.error("REFUSED: %s", exc)
         sys.exit(2)
 
     mode = "dry_run_discover" if (args.dry_run and args.discover) else ("dry_run" if args.dry_run else "real")
-    logger.info("mode=%s pages_per_run=%d database_url_present=%s db_persistent=%s",
-                mode, args.pages_per_run, bool(database_url), db_persistent)
+    logger.info("mode=%s pages_per_run=%d streams=%s database_url_present=%s db_persistent=%s",
+                mode, args.pages_per_run, ",".join(streams) if streams else "all",
+                bool(database_url), db_persistent)
 
     counts_before = snapshot_counts() if not args.dry_run else snapshot_counts()
     command = [
@@ -290,6 +327,7 @@ def main() -> None:
         "--pages-per-run", str(args.pages_per_run),
         "--sleep", str(args.sleep),
     ]
+    command += stream_args
     if args.dry_run:
         command.append("--dry-run")
     if args.discover:

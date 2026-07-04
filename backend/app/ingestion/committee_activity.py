@@ -1,6 +1,7 @@
 """Parse committee meeting records from PMG."""
 import logging
 import re
+import time
 from datetime import date
 from typing import Any
 
@@ -11,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 _PMG_MEETINGS_URL = "https://pmg.org.za/committee-meetings/"
 _PMG_API_MEETINGS_URL = "https://api.pmg.org.za/committee-meeting/"
+_REQUEST_TIMEOUT_SECONDS = 45
+_REQUEST_RETRIES = 3
+_REQUEST_BACKOFF_SECONDS = 1.0
 
 # Explicit attendance codes used by the PMG API.
 ATTENDANCE_CODE_MAP = {
@@ -32,10 +36,38 @@ ATTENDANCE_STATUS_MAP = {
 }
 
 
-def fetch_page(url: str, timeout: int = 20) -> str:
-    resp = requests.get(url, timeout=timeout, headers={"User-Agent": "KnowYourMPZA/1.0"})
-    resp.raise_for_status()
-    return resp.text
+def _is_retryable_http_error(exc: requests.HTTPError) -> bool:
+    response = exc.response
+    return response is not None and response.status_code in {429, 500, 502, 503, 504}
+
+
+def fetch_page(
+    url: str,
+    timeout: int = _REQUEST_TIMEOUT_SECONDS,
+    retries: int = _REQUEST_RETRIES,
+    backoff_seconds: float = _REQUEST_BACKOFF_SECONDS,
+) -> str:
+    """Fetch a page with bounded retry/backoff for transient PMG API failures."""
+    attempts = max(1, retries)
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, timeout=timeout, headers={"User-Agent": "KnowYourMPZA/1.0"})
+            resp.raise_for_status()
+            return resp.text
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            retryable = True
+            last_exc = exc
+        except requests.HTTPError as exc:
+            retryable = _is_retryable_http_error(exc)
+            last_exc = exc
+
+        if not retryable or attempt == attempts:
+            raise last_exc
+        delay = backoff_seconds * (2 ** (attempt - 1))
+        logger.warning("Retrying %s after %s (%d/%d)", url, last_exc, attempt, attempts)
+        time.sleep(delay)
+
+    raise RuntimeError("unreachable fetch retry state")
 
 
 # ---------------------------------------------------------------------------
