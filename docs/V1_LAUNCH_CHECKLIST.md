@@ -26,6 +26,7 @@ The production identity blocker is closed: production has non-zero politicians a
 - [ ] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
+  - 2026-07-04: `backend/scripts/smoke_test_frontend_api.py` now exercises every endpoint the frontend calls, requires non-empty core datasets, and runs daily in scheduled ingestion against the production database via `--start-local-server`, writing `frontend_smoke_report.json`/`.md` into the artifacts. Tick this gate when the first scheduled artifact reports `overall_status=pass`.
 - [ ] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
 
 ## Latest Production Counts

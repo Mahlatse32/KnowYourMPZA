@@ -70,6 +70,10 @@ jobs:
         if: always()
         run: python scripts/report_v1_readiness.py --reports-dir reports || true
 
+      - name: Frontend production-data smoke test
+        if: always()
+        run: python scripts/smoke_test_frontend_api.py --start-local-server --json-only || true
+
       - name: Publish scheduled ingestion summary
         if: always()
         run: |
