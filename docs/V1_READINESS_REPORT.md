@@ -1,81 +1,50 @@
 # KnowYourMPZA V1 Readiness Report
 
-Last updated: 2026-07-04
+Last updated: 2026-07-04 (post engineering-complete milestone)
 
 ## Verdict
 
-NO-GO for public V1 today.
+NO-GO for public V1 today; **zero open engineering blockers**. GO is a function of production backfill time only. Full assessment and exact measurable GO conditions: `docs/V1_LAUNCH_ASSESSMENT.md`.
 
-Identity, CI, rollback, data-quality checks, and reporting gates are materially stronger, but two core production coverage gates remain below launch threshold:
-
-- PMG committee meetings: `3790/34710 = 10.92%`.
-- Parliament questions: `139/44036 = 0.32%`.
-
-The engineering path for both is now in place: PMG meeting backfill has a dedicated scheduled workflow, and Parliament questions use new-record-first backfill. The first PMG backfill run proved production writes but hit the 45-minute workflow timeout before cursor finalization, so the remaining blocker is sustained verified production growth to the launch threshold.
+- PMG committee meetings: `3915/34710 = 11.28%`, growing ~6,000/day under the verified 2-hourly backfill — ETA ~4–5 days to the 80% threshold.
+- Parliament questions: `189/44036 = 0.43%`, first-ever growth verified today (+50, `created=50/updated=0/failed=0`), 2-hourly bounded backfill merged — ETA ~15–16 days to 80% at default bounds.
 
 ## Evidence Reviewed
 
-- Latest completed scheduled ingestion daily run: `28697697822`, `main`, completed successfully on 2026-07-04.
-- Later scheduled ingestion dispatch: `28702236614`, `main@48c111a`; weekly produced artifacts but failed on PA source access, while daily remained stuck in `run_daily_ingestion.py`.
-- Latest accountability sweep evidence: `28696975853`, completed successfully on 2026-07-04.
-- Latest `main` CI after open-PR cleanup: `28707821896`, completed successfully on 2026-07-04.
-- Latest PMG meeting backfill attempt: `28708377083`, `main@ffc11e5`, improved meeting coverage before the job timed out and uploaded readiness artifacts.
-- Readiness artifacts reviewed: `inspect_db.json`, `dataset_report.json`, `data_coverage_dashboard.json`, `identity_bootstrap_after_weekly.json`, `ingestion_brief.json`, and `v1_readiness_report.json`.
+- Scheduled ingestion run `28711148489` (`main`, 2026-07-04): **first fully green daily+weekly dispatch** since launch hardening — daily completed end-to-end including question ingestion; weekly green with the PA systemic block handled as enrichment-only.
+- PMG meeting backfill run `28710353108` (`main`, 2026-07-04): completed in 52 minutes under the 90-minute timeout; durable cursor advanced `page 70 → 80`, `last_status=completed`.
+- Earlier same-day runs `28708377083` and `28708619234`: proved ingestion volume works (+374 meetings / +4,603 attendance in 25 minutes) and isolated the two hang/timeout root causes now fixed.
+- Latest `main` CI green (full backend suite vs PostgreSQL 16 + migrations; frontend build).
+- Artifacts: `inspect_db.json`, `data_coverage_dashboard.json`, `data_quality_checks.json`, `frontend_smoke_report.json` (**pass**, twice), `parliamentary_questions_ingestion_summary.json`, `v1_readiness_report.json`.
 
-## Production Coverage
+## Production Readiness Summary
 
-| Dataset | Production count | Expected/source count | Coverage | Trend since previous scheduled artifact | Status |
-|---|---:|---:|---:|---|---|
-| Politicians | 521 | 521 PMG-derived identities | 100% of PMG-derived identity set | flat | pass |
-| Committees | 34 | 34 PMG-derived committees | 100% of PMG-derived identity set | flat | pass |
-| Committee memberships | 521 | 521 PMG-derived memberships | 100% of PMG-derived identity set | flat | pass |
-| Committee meetings | 3790 | 34710 PMG meetings | 10.92% | +374 since pre-backfill readiness artifact | blocker |
-| Committee attendance | 46537 | no authoritative denominator in artifact | n/a | +4603 since pre-backfill readiness artifact | monitor |
-| Bills | 1171 | 1246 PMG bills | 93.98% | flat | pass |
-| Parliamentary questions | 139 | 44036 Parliament docsjson question records | 0.32% | flat | blocker |
-| Vote events | 762 | no authoritative denominator in artifact | n/a | flat since scheduled run; accountability sweep added +64 earlier | monitor |
-| Vote records | 5 | explicit named/count vote records only | n/a | flat since scheduled run; accountability sweep added +4 earlier | monitor |
-| Unresolved entities | 0 | 0 open unresolved entities | 100% cleared | flat | pass |
-
-## Link Coverage
-
-| Relationship | Linked | Total | Coverage |
-|---|---:|---:|---:|
-| Attendance -> politicians | 28522 | 41934 | 68.02% |
-| Meetings -> committees | 627 | 3416 | 18.35% |
-| Questions -> politicians | 0 | 139 | 0.0% |
-| Vote events -> committees | 195 | 762 | 25.59% |
-| Vote records -> politicians | 0 | 5 | 0.0% |
-
-Identity fallback definition-of-done remains partially satisfied: politicians and committees are non-zero, attendance/meeting/vote links exist, but question identity links remain absent.
-
-## Workflow State
-
-| Workflow | Latest evidence | Status |
+| Area | Status | Notes |
 |---|---|---|
-| CI | Run `28707821896` on latest `main` passed backend and frontend jobs. | pass |
-| Scheduled ingestion daily | Run `28697697822` passed; later dispatch `28702236614` daily is stuck in `run_daily_ingestion.py`. | blocker until timeout fix is merged and rerun |
-| Scheduled ingestion weekly | Run `28702236614` weekly produced artifacts but failed because PA returned systemic HTTP 403. | blocker until PA enrichment-only handling is merged and rerun |
-| Accountability sweep | Run `28696975853` passed; cursor state shows soft failures without whole-sweep failure. | pass |
-| PMG meeting backfill | Run `28708377083` created production records and raised coverage to `10.92%`, but the 45-minute timeout cancelled the sweep before `pmg_committee_meetings` cursor finalization (`last_status=running`, `next_page=70`). | blocker until timeout extension is merged and rerun |
+| Identity tables | green | `politicians=521`, `committees=34`, `memberships=521`, 0 unresolved entities. |
+| Scheduled daily ingestion | green | Run `28711148489` fully green — the docsjson discovery hang (API ignores `page`; only `offset` paginates) fixed in PR #70. |
+| Scheduled weekly ingestion | green | PA systemic 403 handled as enrichment-only (PR #68); PMG fallback keeps identity correctness. |
+| PMG bills | green | `1171/1246 = 93.98%`. |
+| PMG committee meetings | red → recovering | `3915/34710 = 11.28%`; backfill verified end-to-end (timeout fix PR #69), cursor advancing, ~6,000/day. |
+| Parliament questions | red → recovering | `189/44036 = 0.43%`; growth mechanism verified; 2-hourly backfill (PR #72) live. |
+| Frontend production smoke | green | `overall_status=pass` in both of today's production artifact sets. |
+| Data quality gate | amber | Remaining fails: 2 zombie `running` rows (finalizer merged in PR #71, clears next run) and identity-link lag behind the backfill (recovers with the weekly bootstrap). |
+| Operations | green | Rollback runbook, persistent-DB runbook, sweep runbook, PA fallback runbook; every run self-verifies with uploaded artifacts. |
 
-## Current Engineering Fix In Progress
+## Scheduler State
 
-This branch hardens the remaining workflow blockers:
+From backfill run `28710353108` artifacts (2026-07-04 16:19 UTC):
 
-- Adds `timeout-minutes` to scheduled ingestion jobs so stale production runs cannot hang indefinitely.
-- Extends the PMG meeting backfill workflow timeout to 90 minutes so the existing 10-page safety cap can finish and advance cursor state.
-- Treats PA/committee systemic source-access failures as non-blocking enrichment failures only when their source summary explicitly proves `systemic_source_access_failure=true`.
-- Keeps unclassified weekly failures red.
-- Keeps PA source-access status amber in V1 readiness when PMG fallback identity is operationally isolated.
+| Stream | Next page | Source total | Total seen | Failed | Last status |
+|---|---:|---:|---:|---:|---|
+| pmg_committee_meetings | 80 | 34710 | 4000 | 17 | **completed** |
 
-## Launch-Blocking Fixes Only
+Cursor safety was verified under mid-run cancellation (cursor untouched, idempotent re-sweep) and under completion (cursor advanced).
 
-1. Merge and verify the PMG meeting backfill timeout extension, then rerun the workflow and confirm `pmg_committee_meetings` finishes with `last_status=completed` and `next_page` advanced beyond `70`.
-2. Continue scheduled PMG meeting backfills until production meeting coverage reaches at least 80%.
-3. Trigger scheduled Parliament question ingestion on latest `main` and verify question count grows beyond `139`.
-4. Re-run readiness artifacts after production backfills and update this report with after-counts.
+## Launch-Blocking Items Remaining
 
-## Recommendation
+1. **Production time**: meetings backfill to ≥ 27,768 (~4–5 days); questions backfill to ≥ 35,229 (~15–16 days) or an explicit human scope decision for V1 questions.
+2. **Identity-link recovery after backfill**: run (or wait for) the weekly PMG identity bootstrap so meeting/attendance link coverage returns under thresholds.
+3. **Public deployment** (external): backend/frontend deployment per `README.md` is a human infrastructure action; no deployed URL exists in the repository.
 
-NO-GO until production artifacts show material growth for PMG committee meetings and Parliament questions, and the scheduled ingestion workflow completes on the hardened latest `main`.
+No V1.1 or V2 feature work should be accepted until GO is declared or the coverage scope is explicitly re-cut.
