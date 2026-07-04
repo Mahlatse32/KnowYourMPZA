@@ -35,6 +35,7 @@ For every launch-relevant PR:
 4. Verify GitHub Actions checks pass.
 5. Verify production or production-equivalent artifacts when the PR changes ingestion coverage.
 6. Update `docs/V1_LAUNCH_CHECKLIST.md` and `docs/V1_READINESS_REPORT.md` when readiness changes.
+7. For coverage-changing PRs, review the scheduled `v1_readiness_report` artifact before declaring V1 progress.
 
 ## Current No-Merge Risks
 

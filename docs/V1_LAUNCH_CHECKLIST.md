@@ -11,6 +11,7 @@ The production identity blocker is closed: production has non-zero politicians a
 ## Launch Gates
 
 - [x] Production database coverage has been verified from GitHub Actions/Render `DATABASE_URL`.
+- [x] Scheduled ingestion artifacts generate a consolidated V1 readiness report with counts, source totals, coverage percentages, blocker/pass status, last-run evidence, and next action.
 - [x] Politicians table is non-zero in production.
 - [x] Committees table is non-zero in production.
 - [x] Committee attendance links to politician identities.
@@ -74,3 +75,7 @@ Source: `data_coverage_dashboard.json` from scheduled ingestion run `28697697822
 ## Next Highest Priority
 
 Assign Claude one task: recover PMG committee meeting coverage toward at least 80% of the PMG source denominator using the existing scheduler/backfill architecture without reducing scheduler resilience.
+
+## Reporting Loop
+
+Every scheduled daily and weekly ingestion run now writes `v1_readiness_report.json` and `v1_readiness_report.md` from the same artifact set as the dashboard and ingestion brief. Use those files to verify coverage progress after every backfill before changing this checklist.
