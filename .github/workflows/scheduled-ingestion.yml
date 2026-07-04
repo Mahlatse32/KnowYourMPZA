@@ -10,6 +10,7 @@ jobs:
   daily:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '15 3 * * *'
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     defaults:
       run:
         working-directory: backend
@@ -109,6 +110,7 @@ jobs:
   weekly:
     if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 4 * * 0'
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     defaults:
       run:
         working-directory: backend

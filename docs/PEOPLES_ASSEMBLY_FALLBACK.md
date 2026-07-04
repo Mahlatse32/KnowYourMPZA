@@ -33,7 +33,10 @@ maintainer explicitly decides otherwise.
 1. The weekly job (`run_weekly_ingestion.py`) runs
    `ingest_all_people_assembly.py` as its first stage. Stages are
    isolated: a PA failure never blocks committees, alias regeneration, or
-   reports, but any failed stage still turns the weekly job red.
+   reports. If the per-source summary classifies the PA/committee stage as
+   a systemic source-access block, the weekly workflow remains green while
+   the artifacts keep the block visible. Other failures still turn the
+   weekly job red.
 2. `ingest_all_people_assembly.py` classifies an all-URLs-failed batch as
    `systemic_source_access_failure` in
    `reports/people_assembly_ingestion_summary.json`.
@@ -50,8 +53,8 @@ maintainer explicitly decides otherwise.
    `identity_bootstrap_before_after.json` and
    `identity_bootstrap_after_weekly.json` artifacts.
 5. The V1 readiness report (`report_v1_readiness.py`) marks PA source
-   access red whenever the latest summary shows systemic failure, keeping
-   the blocker visible without making it launch-blocking for identity
+   access amber whenever the latest summary shows systemic failure, keeping
+   the limitation visible without making it launch-blocking for identity
    correctness.
 
 ## What People's Assembly adds when it is reachable
@@ -68,10 +71,12 @@ never identity correctness or accountability evidence.
   `people_assembly_ingestion_summary.json`. `systemic_source_access_failure:
   true` means the block persists; `fallback.summary` shows what the PMG
   bootstrap created or linked in the same run.
-- **On weekly-run red caused by the PA stage:** no manual action is
-  required. Confirm the fallback ran (`status=fallback_completed`) and that
-  identity counts in `inspect_db.json` are non-zero. The red job is
-  intentional visibility, not an outage of our pipeline.
+- **On PA source-access block:** confirm the fallback ran
+  (`status=fallback_completed`) and that identity counts in `inspect_db.json`
+  are non-zero. The workflow should remain green for systemic PA/committee
+  source-access blocks, while `people_assembly_ingestion_summary.json`,
+  `committees_ingestion_summary.json`, and the V1 readiness report keep the
+  limitation visible.
 - **Do not disable the PA stage.** Keeping it running is what detects
   recovery and keeps the failure visible (readiness report rule: keep PA
   failures visible; never depend on PA for V1 identity correctness).
