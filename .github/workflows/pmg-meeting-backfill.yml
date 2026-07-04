@@ -131,6 +131,14 @@ jobs:
         if: always()
         run: python scripts/report_data_coverage_dashboard.py || true
 
+      - name: Generate V1 readiness report
+        # Consolidated launch-readiness artifact (PR #62): rebuilds
+        # v1_readiness_report.json/.md from this run's inspect_db and
+        # dashboard outputs so every backfill run shows PMG meeting
+        # coverage progress against the launch threshold.
+        if: always()
+        run: python scripts/report_v1_readiness.py --reports-dir reports || true
+
       - name: Publish step summary
         if: always()
         run: |

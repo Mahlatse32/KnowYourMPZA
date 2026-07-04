@@ -146,6 +146,20 @@ def test_backfill_workflow_uploads_artifacts():
     assert "backend/reports/" in text
 
 
+def test_backfill_workflow_generates_v1_readiness_artifacts_before_upload():
+    """Every backfill run must ship the consolidated V1 readiness report
+    (PR #62) alongside the sweep artifacts, built from the same run's
+    inspect_db and dashboard outputs, and must never block the sweep."""
+    text = BACKFILL_WORKFLOW.read_text(encoding="utf-8")
+    assert "python scripts/report_v1_readiness.py --reports-dir reports || true" in text
+
+    inspect = text.find("scripts/inspect_db.py")
+    dashboard = text.find("report_data_coverage_dashboard.py")
+    readiness = text.find("report_v1_readiness.py")
+    upload = text.find("actions/upload-artifact")
+    assert -1 < inspect < dashboard < readiness < upload
+
+
 # ---------------------------------------------------------------------------
 # Resilient fetch for the meetings API (same contract as bills.fetch_page)
 # ---------------------------------------------------------------------------
