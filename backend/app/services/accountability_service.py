@@ -276,9 +276,12 @@ def upsert_committee_meeting(db: Session, data: dict[str, Any], committee: Commi
         resolved = _resolve_committee(db, data["committee_name"])
         committee_id = resolved.id if resolved else None
 
+    raw_committee_name: str | None = data.get("committee_name") or None
+
     if meeting is None:
         meeting = CommitteeMeeting(
             committee_id=committee_id,
+            committee_name=raw_committee_name,
             title=data["title"],
             date=data.get("date"),
             summary=data.get("summary"),
@@ -292,8 +295,17 @@ def upsert_committee_meeting(db: Session, data: dict[str, Any], committee: Commi
     else:
         if data.get("summary"):
             meeting.summary = data["summary"]
-        if meeting.committee_id is None and committee_id is not None:
-            meeting.committee_id = committee_id
+        # Persist committee_name if we now have one and didn't before.
+        if raw_committee_name and not meeting.committee_name:
+            meeting.committee_name = raw_committee_name
+        # Re-resolve committee_id when a name is available but id is still missing.
+        if meeting.committee_id is None:
+            effective_name = raw_committee_name or meeting.committee_name
+            if effective_name and committee_id is None:
+                resolved = _resolve_committee(db, effective_name)
+                committee_id = resolved.id if resolved else None
+            if committee_id is not None:
+                meeting.committee_id = committee_id
         db.flush()
 
     for attendance_data in data.get("attendance", []):

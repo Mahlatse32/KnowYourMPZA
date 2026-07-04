@@ -58,6 +58,11 @@ ROLE_NORMALIZATIONS = {
     "minister": "Minister",
     "deputy minister": "Deputy Minister",
 }
+REQUEST_HEADERS = {
+    "User-Agent": "KnowYourMPZA/1.0 (+https://github.com/Mahlatse32/KnowYourMPZA; civic data ingestion)",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-ZA,en;q=0.9",
+}
 
 
 @dataclass
@@ -142,7 +147,7 @@ def fetch_page_detailed(url: str) -> FetchOutcome:
     """
     domain = _domain_only(url)
     try:
-        response = requests.get(url, timeout=15, headers={"User-Agent": "KnowYourMPZA/0.1"})
+        response = requests.get(url, timeout=30, headers=REQUEST_HEADERS)
     except requests.Timeout:
         return _record(url, FetchOutcome("", False, None, "timeout", None, domain))
     except requests.ConnectionError:

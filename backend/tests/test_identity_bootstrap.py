@@ -1,0 +1,266 @@
+from datetime import date
+
+import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
+
+from app.models import Base
+from app.models.committee import Committee
+from app.models.committee_attendance import CommitteeAttendance
+from app.models.committee_meeting import CommitteeMeeting
+from app.models.committee_membership import CommitteeMembership
+from app.models.document import Document
+from app.models.parliamentary_question import ParliamentaryQuestion
+from app.models.politician import Politician
+from app.models.question_mention import QuestionMention
+from app.models.source import Source
+from app.models.vote_event import VoteEvent
+from app.ingestion.parliament_questions import upsert_parliamentary_question
+from app.services.identity_bootstrap_service import (
+    bootstrap_identities_from_pmg,
+    estimate_pmg_identity_bootstrap_attempts,
+    normalize_pmg_person_name,
+)
+
+
+@pytest.fixture()
+def db():
+    engine = create_engine(
+        "sqlite:///:memory:",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    Session = sessionmaker(bind=engine)
+    session = Session()
+    yield session
+    session.close()
+    Base.metadata.drop_all(engine)
+
+
+def _pmg_source(db) -> Source:
+    source = Source(
+        name="PMG",
+        base_url="https://pmg.org.za/",
+        source_type="parliamentary_monitoring",
+        reliability_score=0.9,
+    )
+    db.add(source)
+    db.flush()
+    return source
+
+
+def test_normalize_pmg_person_name_handles_pmg_attendance_formats():
+    assert normalize_pmg_person_name("Dlamini, Ms A") == "A Dlamini"
+    assert normalize_pmg_person_name("Mr Julius Malema") == "Julius Malema"
+    assert normalize_pmg_person_name("Portfolio Committee Staff") is None
+
+
+def test_pmg_identity_bootstrap_creates_and_links_identities_idempotently(db):
+    source = _pmg_source(db)
+    document = Document(
+        title="Portfolio Committee on Energy meeting",
+        document_type="PMG_COMMITTEE_MEETING",
+        source=source,
+        source_url="https://pmg.org.za/committee-meeting/bootstrap-doc/",
+        committee_name="Portfolio Committee on Energy",
+        raw_text="A Dlamini attended.",
+    )
+    db.add(document)
+    db.flush()
+    meeting = CommitteeMeeting(
+        title="Portfolio Committee on Energy: briefing",
+        date=date(2026, 1, 20),
+        summary_document_id=document.id,
+        source_url="https://pmg.org.za/committee-meeting/bootstrap-meeting/",
+    )
+    db.add(meeting)
+    db.flush()
+    db.add(
+        CommitteeAttendance(
+            meeting_id=meeting.id,
+            name_raw="Dlamini, Ms A",
+            attendance_status="present",
+            source_url=meeting.source_url,
+        )
+    )
+    db.add(
+        ParliamentaryQuestion(
+            question_number="NW1",
+            title="Energy question",
+            asked_by_name="Dlamini, Ms A",
+            question_text="Question text",
+            source_url="https://www.parliament.gov.za/question/bootstrap-nw1",
+        )
+    )
+    db.add(
+        VoteEvent(
+            title="Portfolio Committee on Energy adopted report",
+            date=date(2026, 1, 21),
+            vote_type="committee_decision",
+            source_url="https://pmg.org.za/vote/bootstrap-energy",
+        )
+    )
+    db.commit()
+
+    assert estimate_pmg_identity_bootstrap_attempts(db) == 3
+
+    first = bootstrap_identities_from_pmg(db)
+    second = bootstrap_identities_from_pmg(db)
+
+    politician = db.scalar(select(Politician).where(Politician.slug == "a-dlamini"))
+    committee = db.scalar(select(Committee).where(Committee.slug == "energy"))
+    attendance = db.scalar(select(CommitteeAttendance).where(CommitteeAttendance.name_raw == "Dlamini, Ms A"))
+    question = db.scalar(select(ParliamentaryQuestion).where(ParliamentaryQuestion.question_number == "NW1"))
+    vote_event = db.scalar(select(VoteEvent).where(VoteEvent.source_url == "https://pmg.org.za/vote/bootstrap-energy"))
+
+    assert first["politicians_created"] == 1
+    assert first["committees_created"] == 1
+    assert first["attendance_linked"] == 1
+    assert first["questions_linked"] == 1
+    assert first["vote_events_linked"] == 1
+    assert first["memberships_created"] == 1
+    assert second["politicians_created"] == 0
+    assert second["committees_created"] == 0
+    assert politician is not None
+    assert politician.source_status == "PMG_DERIVED"
+    assert committee is not None
+    assert meeting.committee_id == committee.id
+    assert attendance.politician_id == politician.id
+    assert question.politician_id == politician.id
+    assert vote_event.committee_id == committee.id
+
+    assert db.scalar(select(Politician).where(Politician.slug == "a-dlamini")).id == politician.id
+    assert len(list(db.scalars(select(Committee).where(Committee.slug == "energy")))) == 1
+    assert len(list(db.scalars(select(CommitteeMembership).where(CommitteeMembership.politician_id == politician.id)))) == 1
+    assert len(list(db.scalars(select(QuestionMention).where(QuestionMention.politician_id == politician.id)))) == 1
+
+
+def test_link_meetings_via_committee_name_column(db):
+    """Strategy 3: meetings with committee_name stored resolve without a Document."""
+    source = _pmg_source(db)
+    # A committee exists (bootstrapped from a document elsewhere).
+    from app.models.document import Document as Doc
+    doc = Doc(
+        title="Finance committee meeting",
+        document_type="PMG_COMMITTEE_MEETING",
+        source=source,
+        source_url="https://pmg.org.za/committee-meeting/finance-doc/",
+        committee_name="Portfolio Committee on Finance",
+        raw_text="Finance briefing.",
+    )
+    db.add(doc)
+    db.flush()
+    db.commit()
+
+    # Bootstrap creates the committee from the document.
+    first = bootstrap_identities_from_pmg(db)
+    committee = db.scalar(select(Committee).where(Committee.slug == "finance"))
+    assert committee is not None, "Committee must be bootstrapped from document"
+
+    # Create two meetings that have committee_name stored (as would happen after
+    # the fix is deployed and the sweep re-processes meetings from the API).
+    m1 = CommitteeMeeting(
+        title="Annual budget briefing",
+        date=date(2026, 3, 1),
+        source_url="https://pmg.org.za/committee-meeting/finance-m1/",
+        committee_name="Portfolio Committee on Finance",   # stored by new column
+    )
+    m2 = CommitteeMeeting(
+        title="MTBPS briefing",
+        date=date(2026, 3, 2),
+        source_url="https://pmg.org.za/committee-meeting/finance-m2/",
+        committee_name="Portfolio Committee on Finance",
+    )
+    db.add_all([m1, m2])
+    db.commit()
+
+    assert m1.committee_id is None
+    assert m2.committee_id is None
+
+    second = bootstrap_identities_from_pmg(db)
+    db.refresh(m1)
+    db.refresh(m2)
+
+    assert m1.committee_id == committee.id, "Strategy 3 must link m1 via committee_name"
+    assert m2.committee_id == committee.id, "Strategy 3 must link m2 via committee_name"
+    assert second["meetings_linked"] >= 2
+
+    # Idempotency: a third run must not double-count.
+    third = bootstrap_identities_from_pmg(db)
+    assert third["meetings_linked"] == 0, "Already-linked meetings must not be re-counted"
+
+
+def test_link_meetings_via_title_colon_prefix(db):
+    """Strategy 4a: titles like 'Portfolio Committee on X: Topic' resolve via colon-prefix."""
+    source = _pmg_source(db)
+    doc = source  # reuse source; we need a committee in the DB
+    from app.models.document import Document as Doc
+    d = Doc(
+        title="Health committee page",
+        document_type="PMG_COMMITTEE_MEETING",
+        source=source,
+        source_url="https://pmg.org.za/committee-meeting/health-doc/",
+        committee_name="Portfolio Committee on Health",
+        raw_text="Health briefing.",
+    )
+    db.add(d)
+    db.commit()
+
+    bootstrap_identities_from_pmg(db)  # creates "Health" committee
+    committee = db.scalar(select(Committee).where(Committee.slug == "health"))
+    assert committee is not None
+
+    # Meeting with NO committee_name column but committee name in title prefix.
+    m = CommitteeMeeting(
+        title="Portfolio Committee on Health: NHI progress update",
+        date=date(2026, 4, 1),
+        source_url="https://pmg.org.za/committee-meeting/health-title-m/",
+        committee_name=None,  # column is NULL — old-style unlinked meeting
+    )
+    db.add(m)
+    db.commit()
+    assert m.committee_id is None
+
+    bootstrap_identities_from_pmg(db)
+    db.refresh(m)
+    assert m.committee_id == committee.id, "Strategy 4a must link via title colon-prefix"
+
+
+def test_question_upsert_preserves_existing_politician_when_parse_cannot_resolve(db):
+    source = _pmg_source(db)
+    from app.models.party import Party
+
+    party = Party(name="Unknown", short_name="UNKNOWN", source_url="https://pmg.org.za/")
+    politician = Politician(
+        full_name="A Dlamini",
+        display_name="A Dlamini",
+        slug="a-dlamini",
+        party=party,
+        source_status="PMG_DERIVED",
+    )
+    question = ParliamentaryQuestion(
+        question_number="NW2",
+        title="Existing question",
+        politician=politician,
+        source=source,
+        source_url="https://www.parliament.gov.za/question/preserve-nw2",
+    )
+    db.add_all([party, politician, question])
+    db.commit()
+
+    updated, created = upsert_parliamentary_question(
+        db,
+        {
+            "question_number": "NW2",
+            "title": "Existing question updated",
+            "asked_by_name": None,
+            "source_url": "https://www.parliament.gov.za/question/preserve-nw2",
+            "raw_text": "",
+        },
+    )
+    db.commit()
+
+    assert created is False
+    assert updated.politician_id == politician.id
