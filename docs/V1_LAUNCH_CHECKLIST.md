@@ -28,6 +28,7 @@ The production identity blocker is closed: production has non-zero politicians a
   - 2026-07-04: PA is formally enrichment-only for V1 with PMG as identity authority; the automatic PMG identity bootstrap fallback, recovery criteria, and operational runbook are documented in `docs/PEOPLES_ASSEMBLY_FALLBACK.md`.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
+  - 2026-07-04: `backend/scripts/smoke_test_frontend_api.py` now exercises every endpoint the frontend calls, requires non-empty core datasets, and runs daily in scheduled ingestion against the production database via `--start-local-server`, writing `frontend_smoke_report.json`/`.md` into the artifacts. Tick this gate when the first scheduled artifact reports `overall_status=pass`.
 - [x] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
   - 2026-07-04: `backend/scripts/check_data_quality.py` runs all six check families with pass/warn/fail thresholds, writes `data_quality_checks.json`/`.md` into the scheduled report artifacts (daily and weekly), and exits non-zero on failure for manual gating. Documented in `docs/DATA_QUALITY_CHECKS.md`.
 
