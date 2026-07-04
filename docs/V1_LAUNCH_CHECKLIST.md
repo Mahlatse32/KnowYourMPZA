@@ -27,7 +27,8 @@ The production identity blocker is closed: production has non-zero politicians a
 - [ ] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
-- [ ] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
+- [x] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
+  - 2026-07-04: `backend/scripts/check_data_quality.py` runs all six check families with pass/warn/fail thresholds, writes `data_quality_checks.json`/`.md` into the scheduled report artifacts (daily and weekly), and exits non-zero on failure for manual gating. Documented in `docs/DATA_QUALITY_CHECKS.md`.
 
 ## Latest Production Counts
 
