@@ -42,7 +42,7 @@ For every launch-relevant PR:
 - PMG committee meeting coverage is only `3416/34710` in the latest production report.
 - Parliament question coverage is only `139/44036` in the latest production report. The known ingestion risk is repeated refresh of already-ingested docsjson URLs; fixes must preserve source URLs, PDF archiving, idempotent upserts, and soft failure reporting.
 - People's Assembly production fetches have shown systemic HTTP 403 failures; fallback is required.
-- Local worktree currently contains unrelated unstaged deletions and untracked artifacts; do not include them in launch PRs.
+- Local worktree hygiene: the unrelated unstaged deletions were restored to match `main`, and downloaded run-artifact directories (`.tmp-gh-run-*/`) are now gitignored. One leftover remains: an untracked `.github/workflows/committee-name-backfill.yml` (a one-time backfill workflow that was never committed); do not include it in launch PRs.
 
 ## Next Task Assignment
 

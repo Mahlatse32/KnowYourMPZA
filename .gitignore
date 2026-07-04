@@ -11,3 +11,5 @@ pgdata/
 frontend/node_modules/
 frontend/dist/
 frontend/tsconfig.tsbuildinfo
+# Downloaded GitHub Actions run artifacts used during production verification
+.tmp-gh-run-*/

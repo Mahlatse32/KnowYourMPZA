@@ -16,6 +16,7 @@ The identity bootstrap and scheduled maintenance path are now production-verifie
 - Earlier weekly production artifacts: `identity_bootstrap_before_after.json`, `identity_bootstrap_after_weekly.json`.
 - Going forward, scheduled ingestion artifacts also include `v1_readiness_report.json` and `v1_readiness_report.md`, which consolidate production counts, source totals, percentage coverage, blocker/pass status, last-run evidence, and next recommended action.
 - Scheduled ingestion artifacts also include `data_quality_checks.json` and `data_quality_checks.md` from `backend/scripts/check_data_quality.py`, the callable pass/warn/fail gate over duplicates, unresolved entities, failed/stuck runs, stale sources, orphaned relationships, and mandatory fields (see `docs/DATA_QUALITY_CHECKS.md`).
+- CI run `28705501325` on `main` (post PR #60/#61 merge), completed successfully on 2026-07-04: full backend suite against PostgreSQL 16 with migrations applied — the production-equivalent test environment gate.
 
 ## Production Readiness Summary
 
