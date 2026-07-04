@@ -39,13 +39,12 @@ For every launch-relevant PR:
 
 ## Current No-Merge Risks
 
-- PMG committee meeting coverage is only `3416/34710` in the latest production report.
-- Parliament question coverage is only `139/44036` in the latest production report. The known ingestion risk is repeated refresh of already-ingested docsjson URLs; fixes must preserve source URLs, PDF archiving, idempotent upserts, and soft failure reporting.
-- People's Assembly production fetches have shown systemic HTTP 403 failures; fallback is required.
-- Local worktree hygiene: the unrelated unstaged deletions were restored to match `main`, and downloaded run-artifact directories (`.tmp-gh-run-*/`) are now gitignored. One leftover remains: an untracked `.github/workflows/committee-name-backfill.yml` (a one-time backfill workflow that was never committed); do not include it in launch PRs.
+- PMG committee meeting coverage is `3915/34710` and Parliament question coverage is `189/44036`; both are recovering under verified 2-hourly backfills. Do not merge anything that alters backfill cadence, batch bounds, cursor semantics, or the docsjson `offset` pagination without fresh production evidence.
+- The docsjson endpoint ignores the `page` parameter; only `offset` paginates. Any discovery change must keep the stale-batch bound and request caps from PR #70.
+- People's Assembly production fetches still show systemic HTTP 403 failures; PA remains enrichment-only (`docs/PEOPLES_ASSEMBLY_FALLBACK.md`).
+- Identity-link coverage temporarily lags the backfill until the weekly PMG identity bootstrap runs; do not "fix" the lag by weakening linker or bootstrap semantics.
+- Local worktree hygiene: one leftover remains — an untracked `.github/workflows/committee-name-backfill.yml` (a one-time backfill workflow that was never committed); do not include it in launch PRs.
 
 ## Next Task Assignment
 
-Claude should work on exactly one V1 task next:
-
-Recover PMG committee meeting coverage toward at least 80% of the PMG source denominator while preserving scheduler resilience, idempotency, source attribution, and cursor safety.
+No engineering task remains (see `docs/V1_LAUNCH_ASSESSMENT.md`). Monitor scheduled `v1_readiness_report` artifacts; tick the two coverage gates at their thresholds; dispatch the weekly job after meeting backfill completes to restore identity-link coverage; disable each backfill cron when its target is reached.
