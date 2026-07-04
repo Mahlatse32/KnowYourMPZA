@@ -1,0 +1,125 @@
+name: Parliament questions backfill
+
+# V1 coverage recovery for Parliament questions. The daily scheduled
+# ingestion creates at most MAX_DAILY_INGESTION_URLS (50) new question
+# records per day against a ~44k docsjson corpus, which cannot close the
+# gap within the launch window. This workflow runs the same bounded,
+# idempotent, new-record-first question ingestion on a frequent schedule
+# with a larger (still bounded) batch. Ingestion is upsert-by-source_url,
+# so overlap with the daily job is safe; new-record-first ordering acts as
+# the durable cursor (already-ingested URLs are deprioritized).
+#
+# When question coverage reaches the V1 target, disable the cron block —
+# the daily scheduled ingestion then keeps the stream fresh.
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_urls:
+        description: "Bounded number of question URLs to ingest this run"
+        required: false
+        default: "200"
+  schedule:
+    # Every 2 hours at :20 on odd hours — offset from the PMG meeting
+    # backfill (:50 even hours), the daily accountability sweep (02:30),
+    # and scheduled ingestion (03:15). Delete this block to disable.
+    - cron: "20 1-23/2 * * *"
+
+permissions:
+  contents: read
+
+# Prevent overlapping question backfill runs. Overlap with the daily
+# scheduled ingestion remains possible and is harmless (idempotent
+# upserts), but two backfill batches at once would double source load.
+concurrency:
+  group: parliament-questions-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      INGESTION_ENABLED: ${{ secrets.INGESTION_ENABLED }}
+      SOURCE_RATE_LIMIT_SLEEP: ${{ vars.SOURCE_RATE_LIMIT_SLEEP || '0.5' }}
+      MAX_QUESTION_BACKFILL_URLS: ${{ github.event.inputs.max_urls || vars.MAX_QUESTION_BACKFILL_URLS || '200' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate backfill configuration
+        run: |
+          case "${INGESTION_ENABLED,,}" in
+            1|true|yes) ;;
+            *)
+              echo "::error::Scheduled ingestion is disabled. Set the repository Actions secret INGESTION_ENABLED to true."
+              exit 1
+              ;;
+          esac
+          if [ -z "$DATABASE_URL" ]; then
+            echo "::error::The repository Actions secret DATABASE_URL is not configured."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Prepare reports directory
+        run: mkdir -p reports
+
+      - run: pip install -r requirements.txt
+      - run: alembic upgrade head
+
+      - name: Run bounded question backfill
+        run: |
+          python scripts/ingest_all_parliamentary_questions.py \
+            --limit "$MAX_QUESTION_BACKFILL_URLS" \
+            --sleep "$SOURCE_RATE_LIMIT_SLEEP"
+
+      - name: Inspect database
+        if: always()
+        run: python scripts/inspect_db.py --samples 3 --json-output > reports/inspect_db.json || true
+
+      - name: Data coverage dashboard
+        if: always()
+        run: python scripts/report_data_coverage_dashboard.py || true
+
+      - name: Finalize stuck ingestion runs
+        if: always()
+        run: python scripts/finalize_stuck_ingestion_runs.py --json-only || true
+
+      - name: Data quality checks
+        if: always()
+        run: python scripts/check_data_quality.py --json-only || true
+
+      - name: Generate V1 readiness report
+        if: always()
+        run: python scripts/report_v1_readiness.py --reports-dir reports || true
+
+      - name: Publish step summary
+        if: always()
+        run: |
+          if [ -f reports/parliamentary_questions_ingestion_summary.json ]; then
+            {
+              echo "## Parliament questions backfill"
+              echo ""
+              echo '```json'
+              cat reports/parliamentary_questions_ingestion_summary.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No question ingestion summary was generated." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload run reports as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parliament-questions-backfill-reports-${{ github.run_number }}
+          path: backend/reports/
+          if-no-files-found: warn
+          retention-days: 30
