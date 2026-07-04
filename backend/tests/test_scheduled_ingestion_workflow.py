@@ -51,6 +51,7 @@ def test_scheduled_ingestion_report_generation_is_non_blocking():
     assert text.count("python scripts/inspect_db.py --samples 3 --json-output > reports/inspect_db.json || true") == 2
     assert text.count("python scripts/dataset_report.py || true") == 2
     assert text.count("python scripts/generate_ingestion_brief.py --reports-dir reports || true") == 2
+    assert text.count("python scripts/report_v1_readiness.py --reports-dir reports || true") == 2
 
 
 def test_scheduled_ingestion_workflow_checks_both_required_secrets():

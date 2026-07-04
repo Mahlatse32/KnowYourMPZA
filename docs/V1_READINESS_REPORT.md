@@ -14,6 +14,7 @@ The identity bootstrap and scheduled maintenance path are now production-verifie
 - GitHub Actions workflow dispatch run `28265387060` on `codex/production-identity-bootstrap-verification`, completed successfully on 2026-06-26.
 - Latest daily production artifacts: `inspect_db.json`, `dataset_report.json`, `data_coverage_dashboard.json`, `pmg_ingestion_summary.json`, `parliamentary_questions_ingestion_summary.json`.
 - Earlier weekly production artifacts: `identity_bootstrap_before_after.json`, `identity_bootstrap_after_weekly.json`.
+- Going forward, scheduled ingestion artifacts also include `v1_readiness_report.json` and `v1_readiness_report.md`, which consolidate production counts, source totals, percentage coverage, blocker/pass status, last-run evidence, and next recommended action.
 
 ## Production Readiness Summary
 

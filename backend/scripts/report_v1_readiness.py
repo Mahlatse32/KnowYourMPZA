@@ -11,11 +11,22 @@ from pathlib import Path
 REPORT_FILES = {
     "data_coverage": "data_coverage_dashboard.json",
     "iec_coverage": "iec_coverage_report.json",
+    "inspect": "inspect_db.json",
     "mp_coverage": "mp_coverage_report.json",
     "ingestion_brief": "ingestion_brief.json",
     "mp_source_audit": "mp_member_source_audit.json",
     "people_assembly": "people_assembly_ingestion_summary.json",
+    "pmg_ingestion": "pmg_ingestion_summary.json",
+    "parliamentary_questions_ingestion": "parliamentary_questions_ingestion_summary.json",
 }
+
+SOURCE_TOTALS = {
+    "pmg_bills": 1246,
+    "pmg_committee_meetings": 34710,
+    "parliamentary_questions": 44036,
+}
+
+LAUNCH_COVERAGE_TARGET = 80.0
 
 
 def redact(value: object) -> str:
@@ -200,6 +211,19 @@ def build_report(inputs: dict) -> dict:
     if ingestion_status != "green":
         recommendations.append("Next PR: address the current ingestion-health blocker without bypassing quality gates.")
 
+    launch_coverage = _launch_coverage(inputs)
+    coverage_blockers = [
+        f"{row['label']} coverage is {row['coverage_pct']}% ({row['production_count']}/{row['source_total']})."
+        for row in launch_coverage
+        if row["launch_status"] == "blocker"
+    ]
+    blockers.extend(coverage_blockers)
+    for row in launch_coverage:
+        if row["launch_status"] == "blocker":
+            recommendations.append(row["next_recommended_action"])
+    if coverage_blockers:
+        overall = "red"
+
     return {
         "generated_at": datetime.now(UTC).isoformat(),
         "overall_status": overall,
@@ -213,6 +237,7 @@ def build_report(inputs: dict) -> dict:
         "completed_capabilities": completed,
         "remaining_before_v1": list(dict.fromkeys(remaining)),
         "recommended_next_prs": list(dict.fromkeys(recommendations)),
+        "launch_coverage": launch_coverage,
         "expected_universe_available": expected_universe,
         "cannot_claim_all_mps": not can_claim_all,
         "full_coverage_claim_supported": overall == "green",
@@ -245,7 +270,18 @@ def render_markdown(report: dict) -> str:
         f"| Ingestion health | {report['ingestion_health_status']} |",
         f"| PA source access | {report['PA_source_access_status']} |",
         f"| Source inventory | {report['source_inventory_status']} |",
+        "",
+        "## Launch coverage",
+        "",
+        "| Dataset | Production count | Source total | Coverage | Status | Last run evidence | Next action |",
+        "|---|---:|---:|---:|---|---|---|",
     ]
+    for row in report["launch_coverage"]:
+        lines.append(
+            f"| {row['label']} | {row['production_count']} | {row['source_total']} | "
+            f"{row['coverage_pct']}% | {row['launch_status']} | "
+            f"{row['last_ingestion_evidence']} | {row['next_recommended_action']} |"
+        )
     for heading, key in (
         ("Blockers", "blockers"),
         ("Completed capabilities", "completed_capabilities"),
@@ -269,6 +305,99 @@ def write_report(report: dict, output_dir: str | Path = "reports") -> tuple[Path
     json_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     markdown_path.write_text(render_markdown(report), encoding="utf-8")
     return json_path, markdown_path
+
+
+def _launch_coverage(inputs: dict) -> list[dict]:
+    dashboard = inputs.get("data_coverage") or {}
+    summary = dashboard.get("executive_summary") or {}
+    inspect_payload = inputs.get("inspect") or {}
+    sweep_states = inspect_payload.get("sweep_states") or []
+    pmg_summary = inputs.get("pmg_ingestion") or {}
+    question_summary = inputs.get("parliamentary_questions_ingestion") or {}
+
+    return [
+        _coverage_row(
+            "PMG bills",
+            int(summary.get("total_bills") or 0),
+            _source_total_from_sweep(sweep_states, "pmg_bills", SOURCE_TOTALS["pmg_bills"]),
+            _sweep_evidence(sweep_states, "pmg_bills", pmg_summary),
+            "Maintain scheduled PMG bill sweeps and monitor for regressions.",
+            "Recover PMG bill coverage through the existing sweep before launch.",
+        ),
+        _coverage_row(
+            "PMG committee meetings",
+            int(summary.get("total_committee_meetings") or 0),
+            _source_total_from_sweep(
+                sweep_states,
+                "pmg_committee_meetings",
+                SOURCE_TOTALS["pmg_committee_meetings"],
+            ),
+            _sweep_evidence(sweep_states, "pmg_committee_meetings", pmg_summary),
+            "Keep monitoring Claude issue #59 until PMG meeting coverage reaches the launch threshold.",
+            "Continue Claude issue #59: recover PMG committee meeting coverage to at least 80%.",
+        ),
+        _coverage_row(
+            "Parliament questions",
+            int(summary.get("total_parliamentary_questions") or 0),
+            SOURCE_TOTALS["parliamentary_questions"],
+            _summary_evidence(question_summary),
+            "Maintain new-record-first Parliament question ingestion and monitor daily growth.",
+            "Run scheduled question ingestion and verify new-record-first backfill increases records.",
+        ),
+    ]
+
+
+def _coverage_row(
+    label: str,
+    production_count: int,
+    source_total: int,
+    last_evidence: str,
+    pass_action: str,
+    blocker_action: str,
+) -> dict:
+    coverage_pct = round(production_count * 100 / source_total, 2) if source_total else None
+    launch_status = "pass" if coverage_pct is not None and coverage_pct >= LAUNCH_COVERAGE_TARGET else "blocker"
+    return {
+        "label": label,
+        "production_count": production_count,
+        "source_total": source_total,
+        "coverage_pct": coverage_pct,
+        "launch_status": launch_status,
+        "last_ingestion_evidence": last_evidence,
+        "next_recommended_action": pass_action if launch_status == "pass" else blocker_action,
+    }
+
+
+def _source_total_from_sweep(sweep_states: list[dict], stream_name: str, fallback: int) -> int:
+    for state in sweep_states:
+        if state.get("stream_name") == stream_name and state.get("source_total"):
+            return int(state["source_total"])
+    return fallback
+
+
+def _sweep_evidence(sweep_states: list[dict], stream_name: str, fallback_summary: dict) -> str:
+    for state in sweep_states:
+        if state.get("stream_name") != stream_name:
+            continue
+        return (
+            f"{stream_name}: status={state.get('last_status') or 'unknown'}, "
+            f"next_page={state.get('next_page')}, seen={state.get('total_seen')}, "
+            f"failed={state.get('total_failed')}, completed_at={state.get('last_completed_at')}"
+        )
+    return _summary_evidence(fallback_summary)
+
+
+def _summary_evidence(summary: dict) -> str:
+    if not summary:
+        return "No ingestion summary artifact present."
+    return (
+        f"status={summary.get('status') or 'unknown'}, "
+        f"attempted={summary.get('attempted_count', 0)}, "
+        f"processed={summary.get('processed_count', 0)}, "
+        f"created={summary.get('created_count', 0)}, "
+        f"updated={summary.get('updated_count', 0)}, "
+        f"failed={summary.get('failed_count', 0)}"
+    )
 
 
 def main() -> int:
