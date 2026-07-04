@@ -163,4 +163,104 @@ def test_link_meetings_via_committee_name_column(db):
     # the fix is deployed and the sweep re-processes meetings from the API).
     m1 = CommitteeMeeting(
         title="Annual budget briefing",
-        date=date(2026,
+        date=date(2026, 3, 1),
+        source_url="https://pmg.org.za/committee-meeting/finance-m1/",
+        committee_name="Portfolio Committee on Finance",   # stored by new column
+    )
+    m2 = CommitteeMeeting(
+        title="MTBPS briefing",
+        date=date(2026, 3, 2),
+        source_url="https://pmg.org.za/committee-meeting/finance-m2/",
+        committee_name="Portfolio Committee on Finance",
+    )
+    db.add_all([m1, m2])
+    db.commit()
+
+    assert m1.committee_id is None
+    assert m2.committee_id is None
+
+    second = bootstrap_identities_from_pmg(db)
+    db.refresh(m1)
+    db.refresh(m2)
+
+    assert m1.committee_id == committee.id, "Strategy 3 must link m1 via committee_name"
+    assert m2.committee_id == committee.id, "Strategy 3 must link m2 via committee_name"
+    assert second["meetings_linked"] >= 2
+
+    # Idempotency: a third run must not double-count.
+    third = bootstrap_identities_from_pmg(db)
+    assert third["meetings_linked"] == 0, "Already-linked meetings must not be re-counted"
+
+
+def test_link_meetings_via_title_colon_prefix(db):
+    """Strategy 4a: titles like 'Portfolio Committee on X: Topic' resolve via colon-prefix."""
+    source = _pmg_source(db)
+    doc = source  # reuse source; we need a committee in the DB
+    from app.models.document import Document as Doc
+    d = Doc(
+        title="Health committee page",
+        document_type="PMG_COMMITTEE_MEETING",
+        source=source,
+        source_url="https://pmg.org.za/committee-meeting/health-doc/",
+        committee_name="Portfolio Committee on Health",
+        raw_text="Health briefing.",
+    )
+    db.add(d)
+    db.commit()
+
+    bootstrap_identities_from_pmg(db)  # creates "Health" committee
+    committee = db.scalar(select(Committee).where(Committee.slug == "health"))
+    assert committee is not None
+
+    # Meeting with NO committee_name column but committee name in title prefix.
+    m = CommitteeMeeting(
+        title="Portfolio Committee on Health: NHI progress update",
+        date=date(2026, 4, 1),
+        source_url="https://pmg.org.za/committee-meeting/health-title-m/",
+        committee_name=None,  # column is NULL — old-style unlinked meeting
+    )
+    db.add(m)
+    db.commit()
+    assert m.committee_id is None
+
+    bootstrap_identities_from_pmg(db)
+    db.refresh(m)
+    assert m.committee_id == committee.id, "Strategy 4a must link via title colon-prefix"
+
+
+def test_question_upsert_preserves_existing_politician_when_parse_cannot_resolve(db):
+    source = _pmg_source(db)
+    from app.models.party import Party
+
+    party = Party(name="Unknown", short_name="UNKNOWN", source_url="https://pmg.org.za/")
+    politician = Politician(
+        full_name="A Dlamini",
+        display_name="A Dlamini",
+        slug="a-dlamini",
+        party=party,
+        source_status="PMG_DERIVED",
+    )
+    question = ParliamentaryQuestion(
+        question_number="NW2",
+        title="Existing question",
+        politician=politician,
+        source=source,
+        source_url="https://www.parliament.gov.za/question/preserve-nw2",
+    )
+    db.add_all([party, politician, question])
+    db.commit()
+
+    updated, created = upsert_parliamentary_question(
+        db,
+        {
+            "question_number": "NW2",
+            "title": "Existing question updated",
+            "asked_by_name": None,
+            "source_url": "https://www.parliament.gov.za/question/preserve-nw2",
+            "raw_text": "",
+        },
+    )
+    db.commit()
+
+    assert created is False
+    assert updated.politician_id == politician.id
