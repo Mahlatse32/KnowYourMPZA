@@ -23,7 +23,8 @@ The production identity blocker is closed: production has non-zero politicians a
 - [ ] PMG committee meeting coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
 - [ ] Parliament question coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
   - 2026-07-04 diagnosis: source access is working, but scheduled ingestion was spending its `50` URL daily limit on already-ingested docsjson URLs. The backfill path now prioritizes newly discovered question URLs before refreshing existing records.
-- [ ] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
+- [x] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
+  - 2026-07-04: PA is formally enrichment-only for V1 with PMG as identity authority; the automatic PMG identity bootstrap fallback, recovery criteria, and operational runbook are documented in `docs/PEOPLES_ASSEMBLY_FALLBACK.md`.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
 - [ ] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
