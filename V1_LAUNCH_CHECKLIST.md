@@ -34,10 +34,10 @@ totals, and publish it as `V1_READINESS_REPORT.md`.
   `unresolved_entities`, `ingestion_runs` (+ `ingestion_errors`), `documents`,
   `bills`, `vote_events` / `vote_records`.
   Existing tooling: `backend/scripts/report_data_coverage_dashboard.py` (counts +
-  Markdown/JSON dashboard) and `backend/scripts/inspect_db.py`. The in-flight
-  `verify_identity_bootstrap_production.py` (branch
-  `codex/production-identity-bootstrap-verification`) already counts most of these —
-  land that PR or fold its table census into the readiness report.
+  Markdown/JSON dashboard), `backend/scripts/inspect_db.py`, and
+  `backend/scripts/verify_identity_bootstrap_production.py` (merged in PR #57),
+  which already counts most of these tables — fold its table census into the
+  readiness report rather than duplicating it.
 - [ ] **1.3 Compare production counts against source-system totals** (see Workstream 2
   for per-source expected universes). Record absolute counts, expected counts, and
   coverage percentage per domain.
@@ -84,11 +84,11 @@ Goal: launch-critical data is backfilled, and one bad record can never kill a jo
   bills, votes, IEC), record: last successful run, cursor position, and remaining
   backlog. Sources: `ingestion_runs` / `ingestion_errors` tables,
   `backend/scripts/generate_ingestion_brief.py`, `GET /ingestion/runs`.
-- [ ] **3.2 Land the in-flight identity-bootstrap work.** Branch
-  `codex/production-identity-bootstrap-verification` (committee_name on meetings,
-  4-strategy question/meeting linker, production verification script) must be
-  PR'd, reviewed, and merged before backfills rerun — reingestion must preserve
-  identity links (commit 82c4a31 behaviour).
+- [x] **3.2 Land the in-flight identity-bootstrap work.** Done — PR #57 merged
+  `codex/production-identity-bootstrap-verification` into `main` (committee_name
+  on meetings, 4-strategy question/meeting linker, production verification
+  script). Backfill reruns must preserve identity links (commit 82c4a31
+  behaviour, covered by the merged regression tests).
 - [ ] **3.3 Run or create safe backfill jobs** for missing launch-critical data only
   (MPs, committees, meetings, questions, attendance, memberships). Use the existing
   batch pattern in `backend/scripts/ingestion_batch_utils.py` (bounded URLs,
@@ -104,13 +104,16 @@ Goal: launch-critical data is backfilled, and one bad record can never kill a jo
   - soft failure per record (log to `ingestion_errors`, continue),
   - no full-job crash from one bad PMG record.
 
-  **Current state (audit finding):** fetchers use 20–30s timeouts
-  (`app/ingestion/*.py`) and `ingestion_batch_utils.py` retries are linear
-  (`retry_attempts=2`, fixed sleep) — the 45s timeout and exponential backoff do
-  **not** exist on `main` yet. Either they live in unmerged work (verify when 3.2
-  lands) or they must be implemented as a small PR with tests. Per-record soft
-  failure exists in the batch utils; confirm every launch-critical pipeline
-  actually goes through that path.
+  **Current state (audit finding, main @ 96773ce):** the full pattern (45s
+  timeout, exponential backoff, bounded retries) exists only in
+  `app/ingestion/bills.py` (`_REQUEST_TIMEOUT_SECONDS = 45`, delay doubling per
+  attempt). The other launch-critical fetchers — `committee_activity.py`,
+  `parliament_questions.py`, `people_assembly.py` (whose `fetch_page` is also
+  used by PMG document ingestion), `votes.py`, `pdf_utils.py` — still use plain
+  20–30s requests with no backoff, and `ingestion_batch_utils.py` retries are
+  linear with a fixed sleep. Extend the `bills.py` pattern to those fetchers as
+  a small PR with tests. Per-record soft failure exists in the batch utils;
+  confirm every launch-critical pipeline actually goes through that path.
 - [ ] **3.6 Remaining gaps become explicit blockers.** Any launch-critical backfill
   that cannot complete before launch is listed in `V1_READINESS_REPORT.md` as a
   named blocker with reason (e.g. PA access blocked, source down).
