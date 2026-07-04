@@ -1,5 +1,12 @@
 # Data Coverage Recovery Plan
 
+> **Superseded (2026-07-04):** this is a point-in-time plan from 2026-06-23.
+> Coverage recovery is now implemented and tracked via the `pmg-meeting-backfill`
+> workflow, the new-record-first question ingestion, and the canonical
+> [`V1_LAUNCH_CHECKLIST.md`](V1_LAUNCH_CHECKLIST.md) /
+> [`V1_READINESS_REPORT.md`](V1_READINESS_REPORT.md). Do not use this file for
+> launch decisions.
+
 Generated: 2026-06-23
 
 ## Production Evidence

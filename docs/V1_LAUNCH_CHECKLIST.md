@@ -21,7 +21,7 @@ The production identity blocker is closed: production has non-zero politicians a
 - [x] Scheduled daily ingestion succeeds on `main`.
 - [x] PMG scheduler sweep states show cursor safety and completed runs.
 - [ ] PMG committee meeting coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
-  - 2026-07-04 diagnosis: nothing is failing — throughput is structurally capped. The daily accountability sweep advances every stream by `pages_per_run=3` pages (150 meetings/day) against a ~695-page source (34,710 meetings), so the cursor at page 70 is exactly on schedule and 80% coverage would take ~160 more days. Fix: a dedicated `pmg-meeting-backfill` workflow sweeps only the `pmg_committee_meetings` stream every 2 hours at the existing 10-page safety cap (~6,000 meetings/day capacity, ~4–5 days to 80%), sharing the daily sweep's concurrency group and cursor so runs never overlap. The meetings fetcher also gains the same 45s-timeout/exponential-backoff behavior as the bills fetcher.
+  - 2026-07-04 diagnosis: nothing is failing in parsing or persistence; throughput is structurally capped. The first dedicated PMG meeting backfill run (`28708377083`) raised production coverage from `3416/34710 = 9.84%` to `3790/34710 = 10.92%`, but the 45-minute workflow timeout cancelled the run before cursor finalization (`last_status=running`, `next_page=70`). Fix in progress: keep the 10-page safety cap and shared `accountability-sweep` concurrency, but extend the workflow timeout to 90 minutes so each bounded batch can finish and advance the durable cursor.
 - [ ] Parliament question coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
   - 2026-07-04 diagnosis: source access is working, but scheduled ingestion was spending its `50` URL daily limit on already-ingested docsjson URLs. The backfill path now prioritizes newly discovered question URLs before refreshing existing records.
 - [x] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
@@ -35,7 +35,7 @@ The production identity blocker is closed: production has non-zero politicians a
 
 ## Latest Production Counts
 
-Source: scheduled ingestion run `28697697822`, `main`, completed successfully on 2026-07-04.
+Source: scheduled ingestion run `28697697822`, plus PMG meeting backfill run `28708377083` where noted.
 
 | Table | Count |
 |---|---:|
@@ -46,8 +46,8 @@ Source: scheduled ingestion run `28697697822`, `main`, completed successfully on
 | documents | 70 |
 | bills | 1171 |
 | bill_events | 11121 |
-| committee_meetings | 3416 |
-| committee_attendance | 41934 |
+| committee_meetings | 3790 |
+| committee_attendance | 46537 |
 | committee_memberships | 521 |
 | document_mentions | 812 |
 | vote_events | 762 |
@@ -60,7 +60,7 @@ Source: scheduled ingestion run `28697697822`, `main`, completed successfully on
 | Dataset | Production count | Source denominator | Coverage | Launch status |
 |---|---:|---:|---:|---|
 | PMG bills | 1171 | 1246 | 93.98% | acceptable for V1 |
-| PMG committee meetings | 3416 | 34710 | 9.84% | blocker; dedicated 2-hourly backfill workflow in progress |
+| PMG committee meetings | 3790 | 34710 | 10.92% | blocker; dedicated 2-hourly backfill workflow needs timeout extension and rerun |
 | Parliament question records | 139 | 44036 | 0.32% | blocker; new-record-first backfill fix in progress |
 
 ## Identity Link Coverage

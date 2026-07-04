@@ -1,5 +1,11 @@
 # KnowYourMPZA V1 Launch Readiness Report
 
+> **Superseded (2026-07-04):** this is a point-in-time snapshot from 2026-06-23.
+> The canonical, continuously updated launch documents are
+> [`V1_READINESS_REPORT.md`](V1_READINESS_REPORT.md) and
+> [`V1_LAUNCH_CHECKLIST.md`](V1_LAUNCH_CHECKLIST.md). Do not use this file for
+> launch decisions.
+
 Generated: 2026-06-23
 
 ## Decision
