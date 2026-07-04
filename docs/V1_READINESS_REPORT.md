@@ -23,7 +23,7 @@ The identity bootstrap and scheduled maintenance path are now production-verifie
 | Scheduled ingestion | green | Latest daily run on `main` succeeded. |
 | PMG bills | green | `1171/1246`, about `93.98%` coverage. |
 | PMG committee meetings | red | `3416/34710`, about `9.84%` coverage. |
-| Parliament questions | red | `139/44036`, about `0.32%` coverage. |
+| Parliament questions | red | `139/44036`, about `0.32%` coverage. Source access works, but scheduled ingestion was reprocessing already-ingested docsjson URLs before creating new records; a new-record-first backfill fix is in progress. |
 | People's Assembly | yellow | Production runner still sees systemic HTTP 403 source access failures; PMG fallback prevents empty identity tables. |
 | Unresolved entities | green | `0` unresolved entities in latest production report. |
 | Duplicate identifiers | green | Dashboard reports duplicate identifier risk as green. |
@@ -66,7 +66,7 @@ The cursor state indicates forward progress with soft failures rather than whole
 ## Launch-Blocking Fixes Only
 
 1. Increase PMG committee meeting backfill throughput safely until coverage approaches at least 80% of the source denominator.
-2. Increase Parliament question ingestion coverage against the docsjson denominator or formally narrow the V1 question surface.
+2. Increase Parliament question ingestion coverage against the docsjson denominator or formally narrow the V1 question surface. The immediate fix is to make scheduled question ingestion spend its bounded daily limit on newly discovered source URLs before refreshing existing question records.
 3. Keep People's Assembly failures visible; do not depend on PA for V1 identity correctness unless source access is restored from the production runner.
 4. Run full backend and frontend verification on the merge candidate after coverage recovery.
 
