@@ -4,73 +4,76 @@ Last updated: 2026-07-04
 
 ## Verdict
 
-Not ready for public V1.
+NO-GO for public V1 today.
 
-The identity bootstrap and scheduled maintenance path are now production-verified, but data coverage is not yet launch-grade for two core user promises: committee activity and parliamentary questions.
+Identity, CI, rollback, data-quality checks, and reporting gates are materially stronger, but two core production coverage gates remain below launch threshold:
+
+- PMG committee meetings: `3416/34710 = 9.84%`.
+- Parliament questions: `139/44036 = 0.32%`.
+
+The engineering path for both is now in place: PMG meeting backfill has a dedicated scheduled workflow, and Parliament questions use new-record-first backfill. The remaining blocker is verified production growth to the launch threshold, not feature design.
 
 ## Evidence Reviewed
 
-- GitHub Actions scheduled ingestion run `28697697822` on `main`, completed successfully on 2026-07-04.
-- GitHub Actions workflow dispatch run `28265387060` on `codex/production-identity-bootstrap-verification`, completed successfully on 2026-06-26.
-- Latest daily production artifacts: `inspect_db.json`, `dataset_report.json`, `data_coverage_dashboard.json`, `pmg_ingestion_summary.json`, `parliamentary_questions_ingestion_summary.json`.
-- Earlier weekly production artifacts: `identity_bootstrap_before_after.json`, `identity_bootstrap_after_weekly.json`.
-- Going forward, scheduled ingestion artifacts also include `v1_readiness_report.json` and `v1_readiness_report.md`, which consolidate production counts, source totals, percentage coverage, blocker/pass status, last-run evidence, and next recommended action.
-- Scheduled ingestion artifacts also include `data_quality_checks.json` and `data_quality_checks.md` from `backend/scripts/check_data_quality.py`, the callable pass/warn/fail gate over duplicates, unresolved entities, failed/stuck runs, stale sources, orphaned relationships, and mandatory fields (see `docs/DATA_QUALITY_CHECKS.md`).
-- CI run `28705501325` on `main` (post PR #60/#61 merge), completed successfully on 2026-07-04: full backend suite against PostgreSQL 16 with migrations applied — the production-equivalent test environment gate.
+- Latest completed scheduled ingestion daily run: `28697697822`, `main`, completed successfully on 2026-07-04.
+- Later scheduled ingestion dispatch: `28702236614`, `main@48c111a`; weekly produced artifacts but failed on PA source access, while daily remained stuck in `run_daily_ingestion.py`.
+- Latest accountability sweep evidence: `28696975853`, completed successfully on 2026-07-04.
+- Latest `main` CI after open-PR cleanup: `28707821896`, completed successfully on 2026-07-04.
+- Readiness artifacts reviewed: `inspect_db.json`, `dataset_report.json`, `data_coverage_dashboard.json`, `identity_bootstrap_after_weekly.json`, `ingestion_brief.json`, and `v1_readiness_report.json`.
 
-## Production Readiness Summary
+## Production Coverage
 
-| Area | Status | Notes |
+| Dataset | Production count | Expected/source count | Coverage | Trend since previous scheduled artifact | Status |
+|---|---:|---:|---:|---|---|
+| Politicians | 521 | 521 PMG-derived identities | 100% of PMG-derived identity set | flat | pass |
+| Committees | 34 | 34 PMG-derived committees | 100% of PMG-derived identity set | flat | pass |
+| Committee memberships | 521 | 521 PMG-derived memberships | 100% of PMG-derived identity set | flat | pass |
+| Committee meetings | 3416 | 34710 PMG meetings | 9.84% | flat since scheduled run; accountability sweep added +150 earlier | blocker |
+| Committee attendance | 41934 | no authoritative denominator in artifact | n/a | flat since scheduled run; accountability sweep added +1809 earlier | monitor |
+| Bills | 1171 | 1246 PMG bills | 93.98% | flat | pass |
+| Parliamentary questions | 139 | 44036 Parliament docsjson question records | 0.32% | flat | blocker |
+| Vote events | 762 | no authoritative denominator in artifact | n/a | flat since scheduled run; accountability sweep added +64 earlier | monitor |
+| Vote records | 5 | explicit named/count vote records only | n/a | flat since scheduled run; accountability sweep added +4 earlier | monitor |
+| Unresolved entities | 0 | 0 open unresolved entities | 100% cleared | flat | pass |
+
+## Link Coverage
+
+| Relationship | Linked | Total | Coverage |
+|---|---:|---:|---:|
+| Attendance -> politicians | 28522 | 41934 | 68.02% |
+| Meetings -> committees | 627 | 3416 | 18.35% |
+| Questions -> politicians | 0 | 139 | 0.0% |
+| Vote events -> committees | 195 | 762 | 25.59% |
+| Vote records -> politicians | 0 | 5 | 0.0% |
+
+Identity fallback definition-of-done remains partially satisfied: politicians and committees are non-zero, attendance/meeting/vote links exist, but question identity links remain absent.
+
+## Workflow State
+
+| Workflow | Latest evidence | Status |
 |---|---|---|
-| Identity tables | green | `politicians=521`, `committees=34` in latest production run. |
-| Scheduled ingestion | green | Latest daily run on `main` succeeded. |
-| PMG bills | green | `1171/1246`, about `93.98%` coverage. |
-| PMG committee meetings | red | `3416/34710`, about `9.84%` coverage. Diagnosis: the daily sweep's `pages_per_run=3` bound (150 meetings/day) cannot close a ~695-page source; a dedicated 2-hourly meetings-only backfill workflow (same cursor, same guards, shared concurrency group) is in progress with ~4–5 days to 80% at capacity. |
-| Parliament questions | red | `139/44036`, about `0.32%` coverage. Source access works, but scheduled ingestion was reprocessing already-ingested docsjson URLs before creating new records; a new-record-first backfill fix is in progress. |
-| People's Assembly | yellow | Production runner still sees systemic HTTP 403 source access failures; PMG fallback prevents empty identity tables. PA is now formally enrichment-only for V1 (`docs/PEOPLES_ASSEMBLY_FALLBACK.md`), so this is not a launch blocker. |
-| Unresolved entities | green | `0` unresolved entities in latest production report. |
-| Duplicate identifiers | green | Dashboard reports duplicate identifier risk as green. |
-| Missing source URLs | green | Dashboard reports `0` missing source URLs. |
-| Missing source dates | yellow | Dashboard reports `359` missing source dates. |
+| CI | Run `28707821896` on latest `main` passed backend and frontend jobs. | pass |
+| Scheduled ingestion daily | Run `28697697822` passed; later dispatch `28702236614` daily is stuck in `run_daily_ingestion.py`. | blocker until timeout fix is merged and rerun |
+| Scheduled ingestion weekly | Run `28702236614` weekly produced artifacts but failed because PA returned systemic HTTP 403. | blocker until PA enrichment-only handling is merged and rerun |
+| Accountability sweep | Run `28696975853` passed; cursor state shows soft failures without whole-sweep failure. | pass |
+| PMG meeting backfill | Workflow exists on `main` with cron `50 */2 * * *`, 10-page cap, shared `accountability-sweep` concurrency, and readiness artifacts. | ready to run |
 
-## Production Counts
+## Current Engineering Fix In Progress
 
-| Dataset | Count |
-|---|---:|
-| politicians | 521 |
-| parties | 1 |
-| committees | 34 |
-| parliamentary_questions | 139 |
-| documents | 70 |
-| bills | 1171 |
-| bill_events | 11121 |
-| committee_meetings | 3416 |
-| committee_attendance | 41934 |
-| committee_memberships | 521 |
-| document_mentions | 812 |
-| vote_events | 762 |
-| vote_records | 5 |
-| ingestion_runs | 179 |
-| unresolved_entities | 0 |
+This branch hardens the remaining workflow blockers:
 
-## Scheduler State
-
-Latest sweep state from run `28697697822`:
-
-| Stream | Next page | Source total | Total seen | Failed | Last status |
-|---|---:|---:|---:|---:|---|
-| pmg_bills | 15 | 1246 | 3242 | 1 | completed |
-| pmg_bill_lifecycle_backfill | 21 | unknown | 3513 | 131 | completed |
-| pmg_committee_meetings | 70 | 34710 | 3500 | 17 | completed |
-| pmg_votes_from_meetings | 70 | 34710 | 3471 | 35 | completed |
-
-The cursor state indicates forward progress with soft failures rather than whole-sweep failure.
+- Adds `timeout-minutes` to scheduled ingestion jobs so stale production runs cannot hang indefinitely.
+- Treats PA/committee systemic source-access failures as non-blocking enrichment failures only when their source summary explicitly proves `systemic_source_access_failure=true`.
+- Keeps unclassified weekly failures red.
+- Keeps PA source-access status amber in V1 readiness when PMG fallback identity is operationally isolated.
 
 ## Launch-Blocking Fixes Only
 
-1. Increase PMG committee meeting backfill throughput safely until coverage approaches at least 80% of the source denominator. In progress: the `pmg-meeting-backfill` workflow sweeps only the `pmg_committee_meetings` stream every 2 hours at the 10-page safety cap, reusing the daily sweep's cursor, guards, and concurrency group; the meetings fetcher now retries transient PMG failures with a 45-second timeout and exponential backoff. Disable the backfill cron once the 80% target is reached.
-2. Increase Parliament question ingestion coverage against the docsjson denominator or formally narrow the V1 question surface. The immediate fix is to make scheduled question ingestion spend its bounded daily limit on newly discovered source URLs before refreshing existing question records.
-3. Keep People's Assembly failures visible; do not depend on PA for V1 identity correctness unless source access is restored from the production runner.
-4. Run full backend and frontend verification on the merge candidate after coverage recovery.
+1. Merge and verify the scheduled-ingestion hardening fix, then cancel or let expire the stale dispatch `28702236614`.
+2. Trigger PMG meeting backfill and verify production meeting coverage increases toward at least 80%.
+3. Trigger scheduled Parliament question ingestion on latest `main` and verify question count grows beyond `139`.
+4. Re-run readiness artifacts after production backfills and update this report with after-counts.
 
-No V1.1 or V2 feature work should be accepted until these are resolved or explicitly scoped out of V1.
+## Recommendation
+
+NO-GO until production artifacts show material growth for PMG committee meetings and Parliament questions, and the scheduled ingestion workflow completes on the hardened latest `main`.

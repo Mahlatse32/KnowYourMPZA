@@ -4,6 +4,7 @@ The weekly runner must keep running the independent downstream stages after a
 systemic People's Assembly source-access failure, generate the reports, and
 still mark the run failed (red) — never silently green. No network or database.
 """
+import json
 import re
 import sys
 from pathlib import Path
@@ -58,19 +59,51 @@ def test_independent_stages_run_after_pa_systemic_failure():
     assert by_stage["dataset_report"] == 0
 
 
-def test_final_status_is_red_when_any_stage_fails():
+def _write_source_summary(path: Path, systemic: bool = True) -> None:
+    path.write_text(
+        json.dumps({"systemic_source_access_failure": systemic}),
+        encoding="utf-8",
+    )
+
+
+def test_final_status_is_green_when_only_pa_enrichment_sources_are_systemically_blocked(tmp_path):
+    _write_source_summary(tmp_path / "people_assembly_ingestion_summary.json")
+    _write_source_summary(tmp_path / "committees_ingestion_summary.json")
     results = [
         {"stage": "people_assembly", "exit_code": 1},
         {"stage": "committees", "exit_code": 1},
         {"stage": "regenerate_aliases", "exit_code": 0},
         {"stage": "dataset_report", "exit_code": 0},
     ]
-    ok, summary = weekly.summarize(results)
-    assert ok is False  # job is marked failed (red), not silently green
-    assert "FAILED" in summary
+    ok, summary = weekly.summarize(results, reports_dir=tmp_path)
+    assert ok is True
+    assert "SOURCE-BLOCKED (non-blocking enrichment)" in summary
     assert "people_assembly" in summary
-    # Points operators at the per-source classification rather than hiding it.
+    assert "PMG-derived identity fallback is the V1 authority" in summary
+
+
+def test_final_status_is_red_when_failed_source_stage_lacks_systemic_summary(tmp_path):
+    results = [
+        {"stage": "people_assembly", "exit_code": 1},
+        {"stage": "regenerate_aliases", "exit_code": 0},
+        {"stage": "dataset_report", "exit_code": 0},
+    ]
+    ok, summary = weekly.summarize(results, reports_dir=tmp_path)
+    assert ok is False
+    assert "FAILED" in summary
     assert "people_assembly_ingestion_summary.json" in summary
+
+
+def test_final_status_is_red_when_non_enrichment_stage_fails(tmp_path):
+    _write_source_summary(tmp_path / "people_assembly_ingestion_summary.json")
+    results = [
+        {"stage": "people_assembly", "exit_code": 1},
+        {"stage": "regenerate_aliases", "exit_code": 0},
+        {"stage": "dataset_report", "exit_code": 1},
+    ]
+    ok, summary = weekly.summarize(results, reports_dir=tmp_path)
+    assert ok is False
+    assert "dataset_report" in summary
 
 
 def test_final_status_is_green_when_all_stages_pass():
@@ -130,7 +163,13 @@ def _block_with(blocks: list[str], needle: str) -> str:
     return matches[0]
 
 
-def test_weekly_runner_step_stays_red_on_failure():
+def test_scheduled_ingestion_jobs_have_timeouts():
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "timeout-minutes: 75" in text
+    assert "timeout-minutes: 90" in text
+
+
+def test_weekly_runner_step_does_not_swallow_unclassified_failures():
     # The runner step must NOT swallow failures — no `|| true`, no
     # `continue-on-error: true` — so a systemic PA failure keeps the job red.
     runner_block = _block_with(_weekly_step_blocks(), "run_weekly_ingestion.py")

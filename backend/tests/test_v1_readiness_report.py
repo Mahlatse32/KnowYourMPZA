@@ -76,7 +76,7 @@ def test_red_when_mp_expected_universe_is_missing():
     assert report["cannot_claim_all_mps"] is True
 
 
-def test_red_when_pa_source_access_is_blocked():
+def test_pa_source_access_block_is_amber_when_pmg_fallback_is_launch_authority():
     report = build_report(
         _inputs(
             people_assembly={
@@ -86,8 +86,9 @@ def test_red_when_pa_source_access_is_blocked():
             }
         )
     )
-    assert report["PA_source_access_status"] == "red"
-    assert any("#47" in blocker for blocker in report["blockers"])
+    assert report["PA_source_access_status"] == "amber"
+    assert not any("#47" in blocker for blocker in report["blockers"])
+    assert any("operationally isolated" in item for item in report["completed_capabilities"])
     assert "password" not in json.dumps(report)
 
 

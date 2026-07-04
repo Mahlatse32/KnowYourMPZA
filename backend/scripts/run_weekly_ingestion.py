@@ -1,9 +1,15 @@
 import os
+import json
 from pathlib import Path
 import subprocess
 from typing import Callable
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+REPORTS_DIR = REPO_ROOT / "reports"
+SOURCE_ACCESS_SUMMARIES = {
+    "people_assembly": "people_assembly_ingestion_summary.json",
+    "committees": "committees_ingestion_summary.json",
+}
 
 
 def main() -> None:
@@ -13,7 +19,7 @@ def main() -> None:
     print(summary, flush=True)
     if not ok:
         # The run failed somewhere, but downstream reports were still produced.
-        # Fail the job red rather than silently passing green.
+        # Fail the job red for unclassified failures rather than hiding them.
         raise SystemExit(1)
 
 
@@ -51,13 +57,31 @@ def run_stages(
     return results
 
 
-def summarize(results: list[dict]) -> tuple[bool, str]:
-    """Return ``(ok, human_summary)``. ``ok`` is False if any stage failed."""
-    failed = [r for r in results if r["exit_code"] != 0]
+def summarize(results: list[dict], reports_dir: Path = REPORTS_DIR) -> tuple[bool, str]:
+    """Return ``(ok, human_summary)`` for the weekly maintenance batch."""
+    failed = []
+    tolerated = []
+    for result in results:
+        if result["exit_code"] == 0:
+            continue
+        if _is_tolerated_source_access_failure(result["stage"], reports_dir):
+            tolerated.append(result)
+        else:
+            failed.append(result)
     lines = ["Weekly ingestion stage summary:"]
     for r in results:
-        status = "ok" if r["exit_code"] == 0 else "FAILED"
+        if r in tolerated:
+            status = "SOURCE-BLOCKED (non-blocking enrichment)"
+        else:
+            status = "ok" if r["exit_code"] == 0 else "FAILED"
         lines.append(f"  - {r['stage']}: {status} (exit {r['exit_code']})")
+    if tolerated:
+        names = ", ".join(r["stage"] for r in tolerated)
+        lines.append(
+            f"{len(tolerated)} enrichment source stage(s) were blocked systemically: {names}. "
+            "The PA block remains visible in reports, but PMG-derived identity fallback is "
+            "the V1 authority, so this does not fail the weekly workflow."
+        )
     if failed:
         names = ", ".join(r["stage"] for r in failed)
         lines.append(
@@ -67,6 +91,18 @@ def summarize(results: list[dict]) -> tuple[bool, str]:
             "source-access classification and recommendation."
         )
     return (not failed), "\n".join(lines)
+
+
+def _is_tolerated_source_access_failure(stage: str, reports_dir: Path) -> bool:
+    filename = SOURCE_ACCESS_SUMMARIES.get(stage)
+    if not filename:
+        return False
+    path = reports_dir / filename
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return payload.get("systemic_source_access_failure") is True
 
 
 def _ensure_enabled() -> None:
