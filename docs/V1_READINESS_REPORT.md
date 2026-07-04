@@ -26,7 +26,7 @@ The identity bootstrap and scheduled maintenance path are now production-verifie
 | PMG bills | green | `1171/1246`, about `93.98%` coverage. |
 | PMG committee meetings | red | `3416/34710`, about `9.84%` coverage. Diagnosis: the daily sweep's `pages_per_run=3` bound (150 meetings/day) cannot close a ~695-page source; a dedicated 2-hourly meetings-only backfill workflow (same cursor, same guards, shared concurrency group) is in progress with ~4–5 days to 80% at capacity. |
 | Parliament questions | red | `139/44036`, about `0.32%` coverage. Source access works, but scheduled ingestion was reprocessing already-ingested docsjson URLs before creating new records; a new-record-first backfill fix is in progress. |
-| People's Assembly | yellow | Production runner still sees systemic HTTP 403 source access failures; PMG fallback prevents empty identity tables. |
+| People's Assembly | yellow | Production runner still sees systemic HTTP 403 source access failures; PMG fallback prevents empty identity tables. PA is now formally enrichment-only for V1 (`docs/PEOPLES_ASSEMBLY_FALLBACK.md`), so this is not a launch blocker. |
 | Unresolved entities | green | `0` unresolved entities in latest production report. |
 | Duplicate identifiers | green | Dashboard reports duplicate identifier risk as green. |
 | Missing source URLs | green | Dashboard reports `0` missing source URLs. |

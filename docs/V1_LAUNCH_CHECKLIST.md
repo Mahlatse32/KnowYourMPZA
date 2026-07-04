@@ -24,7 +24,8 @@ The production identity blocker is closed: production has non-zero politicians a
   - 2026-07-04 diagnosis: nothing is failing — throughput is structurally capped. The daily accountability sweep advances every stream by `pages_per_run=3` pages (150 meetings/day) against a ~695-page source (34,710 meetings), so the cursor at page 70 is exactly on schedule and 80% coverage would take ~160 more days. Fix: a dedicated `pmg-meeting-backfill` workflow sweeps only the `pmg_committee_meetings` stream every 2 hours at the existing 10-page safety cap (~6,000 meetings/day capacity, ~4–5 days to 80%), sharing the daily sweep's concurrency group and cursor so runs never overlap. The meetings fetcher also gains the same 45s-timeout/exponential-backoff behavior as the bills fetcher.
 - [ ] Parliament question coverage reaches a V1-acceptable threshold or is explicitly scoped for public launch.
   - 2026-07-04 diagnosis: source access is working, but scheduled ingestion was spending its `50` URL daily limit on already-ingested docsjson URLs. The backfill path now prioritizes newly discovered question URLs before refreshing existing records.
-- [ ] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
+- [x] People's Assembly source access is either restored or permanently treated as enrichment-only with PMG fallback documented.
+  - 2026-07-04: PA is formally enrichment-only for V1 with PMG as identity authority; the automatic PMG identity bootstrap fallback, recovery criteria, and operational runbook are documented in `docs/PEOPLES_ASSEMBLY_FALLBACK.md`.
 - [ ] Full backend test suite passes in a production-equivalent environment.
 - [ ] Frontend production-data smoke test passes.
 - [x] Duplicate, unresolved entity, failed run, stale data, orphan, and mandatory-field checks are documented and callable.
