@@ -1,13 +1,14 @@
 # KnowYourMPZA V1 Readiness Report
 
-Last updated: 2026-07-04 (post engineering-complete milestone)
+Last updated: 2026-07-06 (final launch gate review)
 
 ## Verdict
 
-NO-GO for public V1 today; **zero open engineering blockers**. GO is a function of production backfill time only. Full assessment and exact measurable GO conditions: `docs/V1_LAUNCH_ASSESSMENT.md`.
+NO-GO for public V1 today; **zero open engineering blockers** after PR #74. GO is a function of production backfill time plus the external deployment step. Full assessment and exact measurable GO conditions: `docs/V1_LAUNCH_ASSESSMENT.md` (see the 2026-07-06 gate review section).
 
-- PMG committee meetings: `3915/34710 = 11.28%`, growing ~6,000/day under the verified 2-hourly backfill — ETA ~4–5 days to the 80% threshold.
-- Parliament questions: `189/44036 = 0.43%`, first-ever growth verified today (+50, `created=50/updated=0/failed=0`), 2-hourly bounded backfill merged — ETA ~15–16 days to 80% at default bounds.
+- PMG committee meetings: `12000/34710 = 34.57%`, growing ~4,400/day under the 2-hourly backfill — ETA ~3–4 days to the 80% threshold.
+- Parliament questions: `764/44036 = 1.73%` after the PR #74 verification run (`created=199` in run `28799811463`); previously frozen at 565 since 2026-07-05 by a poison binary document that failed every backfill run — ETA ~14–15 days to 80% at default bounds, or a human scope decision.
+- 2026-07-05 weekly ingestion run hit its 90-minute timeout in `run_weekly_ingestion.py` (identity-link recovery still pending post-backfill); watch the 2026-07-12 weekly run.
 
 ## Evidence Reviewed
 
