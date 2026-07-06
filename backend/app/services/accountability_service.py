@@ -1,6 +1,6 @@
 """Upsert and list functions for the accountability data layer."""
 import logging
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -175,6 +175,42 @@ def _resolve_party(db: Session, name: str | None) -> Party | None:
     )
 
 
+def _resolve_or_create_party(db: Session, name: str | None, source_url: str | None = None) -> Party | None:
+    """Resolve an explicit source-supplied party name to a Party, creating it
+    on first sight. Names are canonicalized via normalize_party_name so
+    spelling variants ("ANC", "African National Congress") land on one row.
+    Blank or Unknown values resolve to None — the Unknown fallback party is
+    assigned only by the identity bootstrap, never fabricated here."""
+    if not name:
+        return None
+    from app.ingestion.people_assembly import normalize_party_name
+
+    full_name, short_name = normalize_party_name(name)
+    if short_name == "UNKNOWN":
+        return None
+    party = db.scalar(
+        select(Party).where(
+            (func.lower(Party.short_name) == short_name.lower())
+            | (func.lower(Party.name) == full_name.lower())
+            | (func.lower(Party.name) == name.lower())
+            | (func.lower(Party.short_name) == name.lower())
+        )
+    )
+    if party is None:
+        party = Party(
+            name=full_name,
+            short_name=short_name,
+            source_url=source_url,
+            source_last_seen_at=datetime.now(UTC),
+        )
+        db.add(party)
+        db.flush()
+        logger.info("Created party from explicit source data: %s (%s)", full_name, short_name)
+    else:
+        party.source_last_seen_at = datetime.now(UTC)
+    return party
+
+
 def _resolve_committee(db: Session, name: str | None) -> Committee | None:
     """Match a source committee name to an existing Committee, normalizing
     common prefixes ("Portfolio Committee on ..."). Returns None when no
@@ -323,7 +359,9 @@ def _upsert_committee_attendance(db: Session, meeting: CommitteeMeeting, data: d
     record = db.scalar(stmt)
 
     politician = _resolve_politician(db, name_raw)
-    party = _resolve_party(db, data.get("party_name"))
+    # PMG supplies the attendee's party explicitly (confidence 1.0 source
+    # data); create the party on first sight instead of discarding it.
+    party = _resolve_or_create_party(db, data.get("party_name"), data.get("source_url"))
 
     if record is None:
         record = CommitteeAttendance(
@@ -341,6 +379,9 @@ def _upsert_committee_attendance(db: Session, meeting: CommitteeMeeting, data: d
         record.attendance_status = data.get("attendance_status", record.attendance_status)
         if politician and not record.politician_id:
             record.politician_id = politician.id
+        # Heal rows ingested before party creation existed.
+        if party and not record.party_id:
+            record.party_id = party.id
         db.flush()
     return record
 

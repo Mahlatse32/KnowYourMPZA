@@ -74,6 +74,7 @@ def bootstrap_identities_from_pmg(db: Session) -> dict[str, int]:
         "committees_updated": 0,
         "politicians_created": 0,
         "politicians_updated": 0,
+        "politicians_party_enriched": 0,
         "aliases_created": 0,
         "meetings_linked": 0,
         "attendance_linked": 0,
@@ -185,7 +186,12 @@ def _bootstrap_committees(db: Session, summary: dict[str, int]) -> None:
 
 
 def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str, int]) -> None:
-    candidates: dict[str, tuple[str, str | None, object | None]] = {}
+    candidates: dict[str, tuple[str, str | None]] = {}
+    # Distinct explicit party ids seen per person slug across attendance rows.
+    # A party is propagated to a politician only when it is unambiguous —
+    # exactly one real party across every explicit source record. Conflicting
+    # source data is never resolved by guessing.
+    parties_seen: dict[str, set] = {}
     parties_by_id = {party.id: party for party in db.scalars(select(Party))}
     politicians_by_slug = {politician.slug: politician for politician in db.scalars(select(Politician))}
     existing_alias_keys = {
@@ -202,7 +208,10 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
         name = normalize_pmg_person_name(raw_name or "")
         if not name:
             continue
-        candidates.setdefault(create_slug(name), (name, source_url, parties_by_id.get(party_id) or unknown_party))
+        slug = create_slug(name)
+        candidates.setdefault(slug, (name, source_url))
+        if party_id is not None and party_id in parties_by_id and party_id != unknown_party.id:
+            parties_seen.setdefault(slug, set()).add(party_id)
 
     question_rows = db.execute(
         select(ParliamentaryQuestion.asked_by_name, func.min(ParliamentaryQuestion.source_url))
@@ -213,9 +222,12 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
         name = normalize_pmg_person_name(raw_name or "")
         if not name:
             continue
-        candidates.setdefault(create_slug(name), (name, source_url, unknown_party))
+        candidates.setdefault(create_slug(name), (name, source_url))
 
-    for slug, (name, source_url, party) in sorted(candidates.items()):
+    for slug, (name, source_url) in sorted(candidates.items()):
+        seen = parties_seen.get(slug, set())
+        explicit_party = parties_by_id[next(iter(seen))] if len(seen) == 1 else None
+        party = explicit_party or unknown_party
         politician = politicians_by_slug.get(slug)
         if politician is None:
             politician = Politician(
@@ -235,6 +247,11 @@ def _bootstrap_politicians(db: Session, unknown_party: Party, summary: dict[str,
         else:
             if politician.party_id is None:
                 politician.party = party
+            elif explicit_party is not None and politician.party_id == unknown_party.id:
+                # Replace only the Unknown fallback with unambiguous explicit
+                # source data; a real party is never overwritten here.
+                politician.party = explicit_party
+                summary["politicians_party_enriched"] += 1
             if not politician.profile_url and source_url:
                 politician.profile_url = source_url
             if not politician.source_status:
