@@ -37,6 +37,7 @@ def run_pmg_identity_bootstrap(db) -> dict:
     updated = (
         result["committees_updated"]
         + result["politicians_updated"]
+        + result.get("politicians_party_enriched", 0)
         + result["meetings_linked"]
         + result["attendance_linked"]
         + result["questions_linked"]
