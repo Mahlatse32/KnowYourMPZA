@@ -1,6 +1,38 @@
 # KnowYourMPZA — Final V1 Launch Assessment
 
-Assessment date: 2026-07-04 (evidence through scheduled ingestion run `28711148489` and PMG meeting backfill run `28710353108`, both completed successfully on `main`).
+Assessment date: 2026-07-04 (evidence through scheduled ingestion run `28711148489` and PMG meeting backfill run `28710353108`, both completed successfully on `main`). **Updated 2026-07-06 with the final launch gate review below; the 2026-07-06 section supersedes the figures further down.**
+
+## 2026-07-06 final launch gate review
+
+Verdict: **NO-GO today — unchanged in kind.** One new engineering blocker was found and fixed same-day (PR #74); the remaining blockers are coverage volume (production time), one product decision option, and the pre-existing external deployment step.
+
+### Defect found and fixed during this review (PR #74)
+
+Every Parliament questions backfill run and the daily scheduled ingestion job failed on every run from 2026-07-05 onward (16+ consecutive failures; evidence: runs `28789135982`, `28774789735`). Root cause: a binary `.xlsx` question document was fetched as text and parsed as HTML, inserting NUL (0x00) bytes into `question_text`; PostgreSQL rejects NUL, the resulting `DataError` is classified systemic and aborts the whole batch, and because the record was never created it stayed at the head of the new-record-first queue — a permanent poison pill. Questions were frozen at 565 for ~27 hours. PR #74 detects binary bodies (honest `parse_status=FAILED` record, no fabricated text, queue advances), routes misnamed PDFs to the PDF parser, and strips NUL bytes at the upsert choke point. **Production-verified in dispatched run `28799811463`: `attempted=200, processed=199, created=199, failed=1` (the 1 failure is a permanently-404 PDF, non-blocking HTTPError), questions `565 → 764`, workflow green.**
+
+### Launch gates, 2026-07-06
+
+| Gate | Status | Evidence |
+|---|---|---|
+| Engineering: repo clean, CI green, tests passing | PASS | CI run `28799795782` green on `main` post-merge; 601 tests pass; no open PRs; no V1-critical open issues |
+| Production: scheduled workflows healthy | PASS (after fix) | Meeting backfill green on every run; daily/questions failures root-caused to the single PR #74 defect; weekly 90-min timeout on 2026-07-05 is a watch item for 2026-07-12 |
+| Production: backfills progressing | PASS for meetings, RESUMED for questions | Meetings `3,915 → 12,199` in 2 days (~4,400/day); questions `565 → 764` in the post-fix verification run `28799811463` |
+| Data quality: no critical corruption/duplicates | PASS | 0 duplicate groups on all 8 duplicate checks; 0 missing source URLs; 2 open unresolved entities (warn-level) |
+| Data quality: identity-link coverage | FAIL (expected lag) | 61.2% meetings unlinked, 80.7% attendance unlinked — backfill outpaces the weekly linker by design; recovers via weekly bootstrap post-backfill |
+| Frontend: production smoke | PASS | 15/15 checks pass in run `28774789735` artifacts (2026-07-06) |
+| Operations: monitoring, rollback, deployment docs | PASS | Self-verifying artifacts on every run; `docs/ROLLBACK_RUNBOOK.md`; deployment steps in `README.md` (execution is the external blocker) |
+| Coverage: meetings ≥ 27,768 (80%) | FAIL | 12,000/34,710 = 34.57%; ETA ~3–4 days at observed ~4,400/day |
+| Coverage: questions ≥ 35,229 (80%) or approved narrower scope | FAIL | 565/44,036 = 1.28%; ETA ~14–15 days at ~2,400/day once resumed, or a product decision |
+| Public deployment exists | FAIL (external) | No production backend/frontend URL; requires human infrastructure action (Render/Vercel per `README.md`) |
+
+### Blocker classification, 2026-07-06
+
+1. **Coverage volumes** (meetings, questions) — production operations; closing mechanically under scheduled backfills.
+2. **Question scope decision** — product decision; can close the questions gate immediately.
+3. **Public deployment** — external dependency; cannot be executed from this repository.
+4. **Weekly ingestion 90-minute timeout** (2026-07-05 run `28733837210`) — production operations watch item; recurs → raise timeout or bound the weekly sweep.
+
+
 
 ## Recommendation
 

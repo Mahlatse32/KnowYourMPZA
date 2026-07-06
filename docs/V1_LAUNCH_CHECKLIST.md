@@ -1,12 +1,12 @@
 # KnowYourMPZA V1 Launch Checklist
 
-Last updated: 2026-07-04
+Last updated: 2026-07-06
 
 ## Current Decision
 
-V1 is not launch-ready today, but **no engineering blockers remain** — see `docs/V1_LAUNCH_ASSESSMENT.md` for the full final assessment and the measurable GO conditions.
+V1 is not launch-ready today, but **no engineering blockers remain** — see `docs/V1_LAUNCH_ASSESSMENT.md` for the full final assessment (including the 2026-07-06 gate review) and the measurable GO conditions.
 
-All launch gates that engineering can close are closed. The two remaining blockers are coverage volumes now growing mechanically under verified scheduled backfills: PMG committee meetings (~4–5 days to the 80% threshold at observed throughput) and Parliament questions (~15–16 days at current bounds, tunable via `MAX_QUESTION_BACKFILL_URLS`, or immediately closable by an explicit human scope decision).
+2026-07-06 gate review: a binary `.xlsx` question document poisoned the new-record-first queue and made every questions backfill and daily ingestion run fail from 2026-07-05 onward (NUL bytes rejected by PostgreSQL; `DataError` aborts the batch). Fixed and production-verified in PR #74. Meetings backfill was unaffected and grew `3,915 → 12,000` (34.57%) in two days. The remaining blockers are unchanged in kind: coverage volumes (meetings ETA ~3–4 days, questions ~14–15 days or a human scope decision) plus the pre-existing external deployment blocker.
 
 ## Launch Gates
 
@@ -35,43 +35,43 @@ All launch gates that engineering can close are closed. The two remaining blocke
 
 ## Latest Production Counts
 
-Source: scheduled ingestion run `28711148489` (fully green) and PMG meeting backfill run `28710353108` (completed, cursor advanced), both 2026-07-04.
+Source: questions backfill run `28789135982` artifacts (2026-07-06 11:48 UTC, `inspect_db.json`/`data_coverage_dashboard.json`); trend vs the 2026-07-04 baseline (run `28711148489`).
 
-| Table | Count | Trend today |
+| Table | Count | Trend since 2026-07-04 |
 |---|---:|---|
 | politicians | 521 | flat |
 | parties | 1 | flat |
 | committees | 34 | flat |
-| parliamentary_questions | 189 | **+50 (first growth ever)** |
+| parliamentary_questions | 565 | **+376, then frozen since 2026-07-05** (poison-document defect, fixed in PR #74) |
 | documents | 70 | flat |
 | bills | 1171 | flat |
-| bill_events | 11121 | flat |
-| committee_meetings | 3915 | **+499** |
-| committee_attendance | 48053 | **+6119** |
+| bill_events | 11168 | +47 |
+| committee_meetings | 12000 | **+8,085 (~4,400/day)** |
+| committee_attendance | 150297 | **+102,244** |
 | committee_memberships | 521 | flat |
 | document_mentions | 812 | flat |
-| vote_events | 762 | flat |
+| vote_events | 821 | +59 |
 | vote_records | 5 | flat |
-| ingestion_runs | 201 | +22 |
-| unresolved_entities | 0 | flat |
+| ingestion_runs | 250 | +49 (36 failed in last 7 days — the poison-document failures) |
+| unresolved_entities | 2 | +2 (two question-PDF asker names, OPEN, warn-level) |
 
 ## Source Denominator Coverage
 
 | Dataset | Production count | Source denominator | Coverage | Launch status |
 |---|---:|---:|---:|---|
 | PMG bills | 1171 | 1246 | 93.98% | acceptable for V1 |
-| PMG committee meetings | 3915 | 34710 | 11.28% | blocker; 2-hourly backfill verified and running, ~6,000/day, ETA ~4–5 days to 80% |
-| Parliament question records | 189 | 44036 | 0.43% | blocker; growth verified (+50/run), 2-hourly backfill merged (PR #72), ETA ~15–16 days to 80% |
+| PMG committee meetings | 12000 | 34710 | 34.57% | blocker; backfill healthy at ~4,400/day, ETA ~3–4 days to 80% (27,768) |
+| Parliament question records | 565 | 44036 | 1.28% | blocker; queue unblocked by PR #74, ~2,400/day, ETA ~14–15 days to 80% (35,229) or a narrower approved scope |
 
 ## Identity Link Coverage
 
-Source: `data_quality_checks.json` from scheduled ingestion run `28711148489`. Link coverage temporarily lags the backfill because linking runs in the weekly PMG identity bootstrap; expect recovery after the next weekly run (or a manual weekly dispatch post-backfill).
+Source: `data_quality_checks.json` from scheduled ingestion run `28774789735` (2026-07-06). Link coverage temporarily lags the backfill because linking runs in the weekly PMG identity bootstrap; expect recovery after the next weekly run (or a manual weekly dispatch post-backfill). Note: the 2026-07-05 weekly run `28733837210` hit its 90-minute timeout in `run_weekly_ingestion.py` (report steps still completed) — watch the 2026-07-12 weekly run, and raise the timeout or bound the weekly sweep if it recurs.
 
 | Domain | Total | Unlinked | Note |
 |---|---:|---:|---|
-| committee_meetings → committee | 3902 | 3066 (78.6%) | backfill outpacing weekly linker — expected during recovery |
-| committee_attendance → politician | 47904 | 19382 (40.5%) | same lag |
-| parliamentary_questions → politician | 189 | 189 | question linking is mention-based; direct FK links come from bootstrap |
+| committee_meetings → committee | 11699 | 7160 (61.2%) | backfill outpacing weekly linker — expected during recovery |
+| committee_attendance → politician | 147767 | 119245 (80.7%) | same lag |
+| parliamentary_questions → politician | 565 | 565 | question linking is mention-based; direct FK links come from bootstrap |
 | vote_records → politician | 5 | 5 | known limitation (phase 2) |
 
 ## Next Highest Priority
