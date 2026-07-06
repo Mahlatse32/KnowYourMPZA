@@ -197,13 +197,18 @@ def upsert_parliamentary_question(db: Session, parsed: dict) -> tuple[Parliament
     return question, created
 
 
-def ingest_parliamentary_question_urls(db: Session, urls: list[str]) -> dict:
+def ingest_parliamentary_question_urls(
+    db: Session,
+    urls: list[str],
+    metadata_by_url: dict[str, dict] | None = None,
+) -> dict:
     summary = _empty_summary()
     _ensure_source(db)
     db.commit()
     for url in urls:
         try:
             parsed = parse_question_source(url)
+            _apply_discovery_metadata(parsed, (metadata_by_url or {}).get(url))
             _, created = upsert_parliamentary_question(db, parsed)
             _bump(summary, created)
             summary["processed_count"] += 1
@@ -214,6 +219,47 @@ def ingest_parliamentary_question_urls(db: Session, urls: list[str]) -> dict:
         else:
             db.commit()
     return summary
+
+
+def _apply_discovery_metadata(parsed: dict, metadata: dict | None) -> None:
+    """Overlay explicit docsjson discovery metadata onto a parsed question.
+
+    Document-derived values always win; metadata only replaces the
+    URL-derived title fallback and fills fields the document did not yield
+    (question number, dates, reply status). Applied fields are recorded in
+    parse_notes for provenance.
+    """
+    if not metadata:
+        return
+    applied: list[str] = []
+    if metadata.get("title") and _title_is_url_derived(parsed.get("title"), parsed.get("source_url", "")):
+        parsed["title"] = _limit_string(metadata["title"], 500)
+        applied.append("title")
+    for field in ("question_number", "asked_date", "answered_date"):
+        if metadata.get(field) and not parsed.get(field):
+            parsed[field] = metadata[field]
+            applied.append(field)
+    # Reply document types are answers by definition; upgrade the default
+    # UNANSWERED fallback only, never a document-derived status.
+    if metadata.get("status") and (parsed.get("status") or "UNANSWERED").upper() == "UNANSWERED":
+        parsed["status"] = metadata["status"]
+        applied.append("status")
+    if applied:
+        parsed["parse_notes"] = _append_note(
+            parsed.get("parse_notes"),
+            f"Fields from Parliament docsjson metadata: {', '.join(applied)}.",
+        )
+
+
+def _title_is_url_derived(title: str | None, url: str) -> bool:
+    if not title:
+        return True
+    if title == f"Parliamentary question: {url}":
+        return True
+    stem = Path(urlparse(url).path.rstrip("/")).name
+    stem = Path(stem).stem
+    candidates = {stem, stem.replace("-", " ").replace("_", " ").strip()}
+    return title.strip() in candidates
 
 
 def _detect_question_mentions(db: Session, text: str) -> list[tuple[Politician, str, float, str]]:

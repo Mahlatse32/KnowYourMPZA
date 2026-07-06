@@ -1,4 +1,5 @@
 import re
+from datetime import date, datetime
 from urllib.parse import urljoin, urlparse
 
 import requests
@@ -16,16 +17,47 @@ DEFAULT_LISTING_URLS = [
 
 DOC_TYPES = ["EXE_RQ_NA", "EXE_R_NCOP", "HAN_R_NA", "QUEST_PAP"]
 
+# Human-readable labels for the docsjson document types, used to build titles
+# from explicit source metadata. Reply types carry the reply date.
+_DOC_TYPE_LABELS = {
+    "EXE_RQ_NA": ("Written question reply", "National Assembly", "answered_date"),
+    "EXE_R_NCOP": ("Written question reply", "NCOP", "answered_date"),
+    "HAN_R_NA": ("Question reply (Hansard)", "National Assembly", "answered_date"),
+    "QUEST_PAP": ("Question paper", None, "asked_date"),
+}
+
 
 def discover_parliamentary_question_urls(
     listing_urls: list[str] | None = None,
     limit: int | None = None,
     year: int | None = None,
 ) -> list[str]:
+    urls, _ = discover_parliamentary_question_records(
+        listing_urls=listing_urls, limit=limit, year=year
+    )
+    return urls
+
+
+def discover_parliamentary_question_records(
+    listing_urls: list[str] | None = None,
+    limit: int | None = None,
+    year: int | None = None,
+) -> tuple[list[str], dict[str, dict]]:
+    """Discover question document URLs plus per-URL metadata.
+
+    Returns (sorted urls, metadata_by_url). Metadata comes only from explicit
+    docsjson record fields (name/date/type); listing-page URLs have no
+    metadata and simply map to an absent entry.
+    """
     discovered: set[str] = set()
-    discovered.update(discover_docsjson_urls(limit=limit, year=year))
+    metadata_by_url: dict[str, dict] = {}
+    for url, meta in _docsjson_url_metadata(limit=limit, year=year).items():
+        discovered.add(url)
+        if meta:
+            metadata_by_url[url] = meta
     if limit and len(discovered) >= limit:
-        return sorted(discovered)[:limit]
+        urls = sorted(discovered)[:limit]
+        return urls, {url: metadata_by_url[url] for url in urls if url in metadata_by_url}
     for listing_url in listing_urls or DEFAULT_LISTING_URLS:
         html = fetch_page(listing_url)
         if not html:
@@ -33,8 +65,9 @@ def discover_parliamentary_question_urls(
         for url in urls_from_listing(listing_url, html, year=year):
             discovered.add(url)
             if limit and len(discovered) >= limit:
-                return sorted(discovered)
-    return sorted(discovered)
+                urls = sorted(discovered)
+                return urls, metadata_by_url
+    return sorted(discovered), metadata_by_url
 
 
 _DOCSJSON_PER_PAGE = 50
@@ -44,7 +77,11 @@ _DOCSJSON_MAX_STALE_BATCHES = 2
 
 
 def discover_docsjson_urls(limit: int | None = None, year: int | None = None) -> list[str]:
-    urls: set[str] = set()
+    return sorted(_docsjson_url_metadata(limit=limit, year=year))
+
+
+def _docsjson_url_metadata(limit: int | None = None, year: int | None = None) -> dict[str, dict]:
+    urls: dict[str, dict] = {}
     for doc_type in DOC_TYPES:
         offset = 0
         stale_batches = 0
@@ -61,9 +98,9 @@ def discover_docsjson_urls(limit: int | None = None, year: int | None = None) ->
                 haystack = f"{record.get('name', '')} {record.get('date', '')} {url}"
                 if year and str(year) not in haystack:
                     continue
-                urls.add(url)
+                urls.setdefault(url, question_metadata_from_record(record))
                 if limit and len(urls) >= limit:
-                    return sorted(urls)
+                    return urls
             # The docsjson endpoint ignores the documented `page` parameter and
             # only advances via `offset`. If a window adds nothing new, the
             # source is repeating itself (or everything normalized to known
@@ -77,7 +114,72 @@ def discover_docsjson_urls(limit: int | None = None, year: int | None = None) ->
             if len(records) < _DOCSJSON_PER_PAGE:
                 break
             offset += len(records)
-    return sorted(urls)
+    return urls
+
+
+def question_metadata_from_record(record: dict) -> dict:
+    """Extract presentation metadata from explicit docsjson record fields.
+
+    Only source-provided values are used: the original filename (which
+    carries the question number and often a date), the record date (which is
+    sometimes corrupt and must pass a sanity window), and the document type.
+    Anything that cannot be validated is omitted rather than guessed.
+    """
+    name = str(record.get("name") or "").strip()
+    stem = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", name)
+    doc_type = str(record.get("type") or "").strip().upper()
+    label, house, date_field = _DOC_TYPE_LABELS.get(doc_type, ("Parliamentary question document", None, "asked_date"))
+
+    number = None
+    number_match = re.match(r"^R?([A-Z]{1,4}\d{1,6})\b", stem.upper())
+    if number_match:
+        number = number_match.group(1)
+
+    doc_date = _valid_question_date(str(record.get("date") or "")) or _date_from_name(stem)
+
+    title_parts = [label]
+    if number:
+        title_parts.append(number)
+    if house:
+        title_parts.append(f"({house})")
+    if doc_date:
+        title_parts.append(f"— {doc_date.isoformat()}")
+    title = " ".join(title_parts) if (number or doc_date) else (stem or None)
+
+    metadata: dict = {}
+    if title:
+        metadata["title"] = title
+    if number:
+        metadata["question_number"] = number
+    if doc_date:
+        metadata[date_field] = doc_date
+    # A reply document type means the question was answered — explicit source
+    # semantics, not inference.
+    if date_field == "answered_date":
+        metadata["status"] = "ANSWERED"
+    return metadata
+
+
+_QUESTION_DATE_MIN_YEAR = 1994
+
+
+def _valid_question_date(value: str) -> date | None:
+    """The docsjson `date` field is sometimes corrupt (question numbers leak
+    into it, e.g. "5127-10-10"); accept only ISO dates within a sane window."""
+    try:
+        parsed = datetime.strptime(value.strip()[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    if _QUESTION_DATE_MIN_YEAR <= parsed.year <= datetime.now().year + 1:
+        return parsed
+    return None
+
+
+def _date_from_name(stem: str) -> date | None:
+    match = re.search(r"(\d{4}-\d{2}-\d{2})", stem)
+    if not match:
+        return None
+    return _valid_question_date(match.group(1))
 
 
 def _docsjson_records(doc_type: str, offset: int, per_page: int) -> list[dict]:
