@@ -21,6 +21,9 @@ from app.services.entity_resolution import ResolutionResult, resolve_politician_
 
 SOURCE_NAME = "Parliamentary Questions"
 
+# Decoded leading bytes of a ZIP container (xlsx/docx served from question URLs).
+_ZIP_SIGNATURE = "PK\x03\x04"
+
 
 def fetch_page(url: str) -> str:
     try:
@@ -80,6 +83,10 @@ def parse_question_source(url: str) -> dict:
     html = fetch_page(url)
     if not html:
         raise ValueError("Fetch failed or returned empty HTML.")
+    if html.startswith("%PDF-"):
+        return parse_question_pdf(url, download_file(url), source_url=url)
+    if _is_binary_content(html):
+        return _parse_binary_document(url, html)
     pdf_url = _first_pdf_link(url, html)
     if pdf_url:
         try:
@@ -92,6 +99,26 @@ def parse_question_source(url: str) -> dict:
             parsed["parse_notes"] = f"Linked PDF extraction failed: {exc}"
             return parsed
     return parse_question_page(url, html)
+
+
+def _is_binary_content(content: str) -> bool:
+    # A stray NUL in otherwise-real HTML is sanitized later; a NUL-dense body
+    # is a binary document (xlsx/docx/doc) that must not be parsed as HTML.
+    head = content[:8192]
+    return head.startswith(_ZIP_SIGNATURE) or head.count("\x00") > 4
+
+
+def _parse_binary_document(url: str, content: str) -> dict:
+    suffix = Path(urlparse(url).path).suffix.lstrip(".").upper()
+    return _parsed_from_text(
+        url=url,
+        text="",
+        title=_title_from_pdf_url(url),
+        archive_path=archive_html(SOURCE_NAME, url, content),
+        source_file_type=_limit_string(suffix, 50) or "BINARY",
+        parse_status="FAILED",
+        parse_notes="Binary (non-HTML) response body; archived without text extraction.",
+    )
 
 
 def resolve_question_asker(raw_name: str, db: Session) -> ResolutionResult | None:
@@ -109,6 +136,8 @@ def upsert_parliamentary_question(db: Session, parsed: dict) -> tuple[Parliament
         select(ParliamentaryQuestion).where(ParliamentaryQuestion.source_url == parsed["source_url"])
     ).first()
     resolved_politician = resolution.politician if resolution else (existing.politician if existing else None)
+    # PostgreSQL text columns reject NUL (0x00) bytes; strip them at the single
+    # choke point before the row is written.
     payload = {
         "question_number": parsed.get("question_number"),
         "title": parsed.get("title"),
@@ -128,6 +157,10 @@ def upsert_parliamentary_question(db: Session, parsed: dict) -> tuple[Parliament
         "extracted_text_available": parsed.get("extracted_text_available", False),
         "parse_status": parsed.get("parse_status"),
         "parse_notes": parsed.get("parse_notes"),
+    }
+    payload = {
+        key: value.replace("\x00", "") if isinstance(value, str) else value
+        for key, value in payload.items()
     }
     created = existing is None
     question = existing or ParliamentaryQuestion()
@@ -324,6 +357,7 @@ def _parsed_from_text(
     parse_status: str | None = None,
     parse_notes: str | None = None,
 ) -> dict:
+    text = (text or "").replace("\x00", "")
     fields = _label_fields(text)
     question_text, answer_text = _split_question_answer(text, fields)
     asked_by_name = _first(fields, "asked_by", "asked by", "member", "mp", "question by")
