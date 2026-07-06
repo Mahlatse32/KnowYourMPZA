@@ -5,7 +5,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.db import SessionLocal
-from app.ingestion.parliament_question_discovery import discover_parliamentary_question_urls
+from app.ingestion.parliament_question_discovery import discover_parliamentary_question_records
 from app.ingestion.parliament_questions import ingest_parliamentary_question_urls
 from app.models.parliamentary_question import ParliamentaryQuestion
 from app.services.ingestion_run_service import finish_ingestion_run, start_ingestion_run
@@ -45,7 +45,9 @@ def main() -> int:
         discovery_limit = max(ingest_limit * 20, 1000)
 
     try:
-        discovered_urls = discover_parliamentary_question_urls(limit=discovery_limit, year=args.year)
+        discovered_urls, metadata_by_url = discover_parliamentary_question_records(
+            limit=discovery_limit, year=args.year
+        )
     except Exception as exc:
         result = discovery_failure("parliamentary_questions", exc)
         emit_result(result, "parliamentary_questions_ingestion_summary.json")
@@ -73,7 +75,7 @@ def main() -> int:
             run = start_ingestion_run(db, "Parliamentary Questions", "PARLIAMENTARY_QUESTIONS", len(urls))
             total, systemic = run_url_batch(
                 urls,
-                lambda url: ingest_parliamentary_question_urls(db, [url]),
+                lambda url: ingest_parliamentary_question_urls(db, [url], metadata_by_url=metadata_by_url),
                 sleep_seconds=args.sleep,
             )
             finish_ingestion_run(db, run, total)
