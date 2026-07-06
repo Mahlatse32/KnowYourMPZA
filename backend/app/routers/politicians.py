@@ -4,11 +4,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.schemas.attendance import PoliticianAttendanceRead
 from app.schemas.committee import CommitteeMembershipRead
 from app.schemas.document import DocumentMentionRead
 from app.schemas.politician import PoliticianDetailRead, PoliticianRead
 from app.services.politician_service import (
     get_politician,
+    get_politician_attendance_summary,
     list_politician_committee_memberships,
     list_politician_document_mentions,
     list_politicians,
@@ -39,6 +41,17 @@ def get_politician_committees(politician_id: uuid.UUID, db: Session = Depends(ge
     if get_politician(db, politician_id) is None:
         raise HTTPException(status_code=404, detail="Politician not found.")
     return list_politician_committee_memberships(db, politician_id)
+
+
+@router.get("/{politician_id}/attendance", response_model=PoliticianAttendanceRead)
+def get_politician_attendance(
+    politician_id: uuid.UUID,
+    recent_limit: int = Query(default=10, ge=1, le=50),
+    db: Session = Depends(get_db),
+):
+    if get_politician(db, politician_id) is None:
+        raise HTTPException(status_code=404, detail="Politician not found.")
+    return get_politician_attendance_summary(db, politician_id, recent_limit=recent_limit)
 
 
 @router.get("/{politician_id}/documents", response_model=list[DocumentMentionRead])
