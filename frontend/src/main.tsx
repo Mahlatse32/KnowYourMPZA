@@ -41,6 +41,12 @@ type Question = {
   answer_text?: string;
 };
 type QuestionDetail = Question & { mentions: Array<{ id: string; snippet?: string; confidence_score?: number; match_reason?: string; politician: Politician }> };
+type AttendanceSummary = {
+  totals: { present: number; absent: number; apology: number; unknown: number };
+  recorded_meetings: number;
+  by_committee: Array<{ committee_id?: string; committee_name?: string; present: number; absent: number; apology: number; unknown: number; total: number }>;
+  recent: Array<{ meeting_id: string; meeting_title: string; meeting_date?: string; committee_name?: string; attendance_status: string; source_url?: string }>;
+};
 
 function App() {
   const [path, setPath] = useState(location.pathname);
@@ -117,6 +123,7 @@ function SearchPage({ navigate }: { navigate: (to: string) => void }) {
 function PoliticianPage({ id }: { id: string }) {
   const { data: person } = useApi<Politician>(`/politicians/${id}`);
   const { data: committees } = useApi<CommitteeMembership[]>(`/politicians/${id}/committees`);
+  const { data: attendance } = useApi<AttendanceSummary>(`/politicians/${id}/attendance`);
   const { data: documents } = useApi<DocumentMention[]>(`/politicians/${id}/documents?limit=20`);
   const { data: questions } = useApi<Question[]>(`/politicians/${id}/questions?limit=20`);
   if (!person) return <p>Loading...</p>;
@@ -130,10 +137,52 @@ function PoliticianPage({ id }: { id: string }) {
       </div>
       <div className="space-y-5">
         <Panel title="Committees">{committees?.map((item) => <BasicCard key={item.id} title={item.committee.name} meta={item.role || "Member"} link={item.source_url} />)}</Panel>
+        <AttendancePanel data={attendance} />
         <Panel title="PMG Evidence">{documents?.map((item) => <DocumentCard key={item.id} item={item.document} snippet={item.snippet} />)}</Panel>
         <Panel title="Parliamentary Questions">{questions?.map((item) => <QuestionCard key={item.id} item={item} />)}</Panel>
       </div>
     </section>
+  );
+}
+
+function AttendancePanel({ data }: { data: AttendanceSummary | null }) {
+  if (!data) return <Panel title="Committee Attendance"><p className="text-sm text-slate-600">Loading...</p></Panel>;
+  if (data.recorded_meetings === 0) {
+    return (
+      <Panel title="Committee Attendance">
+        <p className="rounded border border-line bg-white p-4 text-sm text-slate-700">
+          No attendance records have been linked to this MP yet. Historical meeting records are still being imported and linked.
+        </p>
+      </Panel>
+    );
+  }
+  const { totals } = data;
+  return (
+    <Panel title="Committee Attendance">
+      <article className="rounded border border-line bg-white p-4">
+        <p className="text-sm text-slate-700">
+          Recorded in <span className="font-semibold">{data.recorded_meetings}</span> meeting attendance records:{" "}
+          <span className="font-semibold">{totals.present}</span> present, <span className="font-semibold">{totals.apology}</span> apologies,{" "}
+          <span className="font-semibold">{totals.absent}</span> absent{totals.unknown > 0 ? `, ${totals.unknown} unrecorded` : ""}.
+        </p>
+        <p className="mt-2 text-xs text-slate-500">
+          Counts cover only explicit PMG attendance records linked to this MP so far. Historical meetings are still being imported, so this is not yet a complete attendance rate.
+        </p>
+      </article>
+      {data.by_committee.slice(0, 8).map((row, index) => (
+        <article key={row.committee_id || `${row.committee_name}-${index}`} className="rounded border border-line bg-white p-4">
+          <h3 className="text-sm font-semibold">{row.committee_name || "Committee not yet linked"}</h3>
+          <p className="mt-1 text-sm text-slate-700">{row.present} present | {row.apology} apologies | {row.absent} absent | {row.total} recorded</p>
+        </article>
+      ))}
+      {data.recent.slice(0, 5).map((meeting) => (
+        <article key={meeting.meeting_id} className="rounded border border-line bg-white p-4">
+          <h3 className="text-sm font-semibold">{meeting.meeting_title}</h3>
+          <p className="mt-1 text-sm text-slate-700">{[meeting.meeting_date, meeting.committee_name, meeting.attendance_status].filter(Boolean).join(" | ")}</p>
+          <EvidenceLink href={meeting.source_url} />
+        </article>
+      ))}
+    </Panel>
   );
 }
 
