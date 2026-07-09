@@ -30,6 +30,15 @@ def _healthy_responses() -> dict:
         "/questions?limit=100": (200, [QUESTION]),
         f"/politicians/{politician_id}": (200, POLITICIAN),
         f"/politicians/{politician_id}/committees": (200, []),
+        f"/politicians/{politician_id}/attendance": (
+            200,
+            {
+                "totals": {"present": 0, "absent": 0, "apology": 0, "unknown": 0},
+                "recorded_meetings": 0,
+                "by_committee": [],
+                "recent": [],
+            },
+        ),
         f"/politicians/{politician_id}/documents?limit=20": (200, []),
         f"/politicians/{politician_id}/questions?limit=20": (200, []),
         "/search?name=Person": (200, [POLITICIAN]),
@@ -53,7 +62,7 @@ def test_all_checks_pass_against_healthy_api():
     assert report["overall_status"] == "pass"
     assert report["summary"]["checks_fail"] == 0
     assert report["summary"]["checks_warn"] == 0
-    assert report["summary"]["checks_total"] == 15
+    assert report["summary"]["checks_total"] == 16
 
 
 def test_empty_core_dataset_fails():
@@ -142,7 +151,7 @@ def test_covers_every_endpoint_the_frontend_calls():
     assert frontend_paths, "frontend main.tsx no longer matches the expected endpoint patterns"
     missing = frontend_paths - exercised
     assert not missing, f"smoke test does not cover frontend endpoints: {sorted(missing)}"
-    for template in ("/politicians/${id}", "/politicians/${id}/committees", "/documents/${id}", "/questions/${id}"):
+    for template in ("/politicians/${id}", "/politicians/${id}/committees", "/politicians/${id}/attendance", "/documents/${id}", "/questions/${id}"):
         assert template in main_tsx, f"frontend no longer calls {template}; update the smoke test"
 
 

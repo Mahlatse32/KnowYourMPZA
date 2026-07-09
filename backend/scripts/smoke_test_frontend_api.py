@@ -86,6 +86,7 @@ def run_smoke(fetch) -> dict:
         for path, name in (
             (f"/politicians/{politician_id}", "politician detail"),
             (f"/politicians/{politician_id}/committees", "politician committees"),
+            (f"/politicians/{politician_id}/attendance", "politician attendance"),
             (f"/politicians/{politician_id}/documents?limit=20", "politician documents"),
             (f"/politicians/{politician_id}/questions?limit=20", "politician questions"),
         ):
