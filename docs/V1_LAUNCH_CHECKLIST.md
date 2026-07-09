@@ -4,7 +4,7 @@ Last updated: 2026-07-09
 
 ## Current Decision
 
-GO WITH KNOWN LIMITATIONS after PR4 is merged, CI is green, and production is deployed from latest `main`.
+GO WITH KNOWN LIMITATIONS after production is deployed from latest `main`.
 
 ## Product Gates
 
@@ -17,9 +17,11 @@ GO WITH KNOWN LIMITATIONS after PR4 is merged, CI is green, and production is de
 - [x] Question docsjson metadata enrichment is implemented and tested (PR #77).
 - [x] Frontend smoke against production data passes in scheduled artifacts (`overall_status=pass`, run `28921400351`).
 - [x] Source links are retained for public verification (0 missing source URLs in latest coverage reports).
-- [ ] Honest empty states and coverage notices are merged and deployed (PR4 branch `codex/honest-empty-states`).
-- [ ] Final CI on PR4 is green.
+- [x] Honest empty states and coverage notices are merged (PR #79).
+- [x] Attendance endpoint is covered by the production smoke test (PR #80).
+- [x] Final CI on release-readiness code is green (`28998884475`).
 - [ ] Production frontend/backend are deployed from latest `main`.
+- [ ] `DEPLOYMENT_CHECKLIST.md` is completed during deployment.
 
 ## Historical Coverage Gates
 
@@ -45,3 +47,11 @@ These are no longer treated as the only launch decision, but remain public-limit
 - Do not claim complete historical meeting/question/vote coverage.
 - Do not present missing linked sections as proof of no activity.
 - Do not infer parties, committees, question askers, or attendance without source-backed records.
+
+## Release Assets
+
+- `RELEASE_NOTES_V1.md`
+- `KNOWN_LIMITATIONS.md`
+- `DEPLOYMENT_CHECKLIST.md`
+- `POST_LAUNCH_MONITORING.md`
+- `V1_RELEASE_PACKAGE.md`
