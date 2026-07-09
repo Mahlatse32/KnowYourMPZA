@@ -109,37 +109,49 @@ function Home({ navigate }: { navigate: (to: string) => void }) {
 
 function SearchPage({ navigate }: { navigate: (to: string) => void }) {
   const [query, setQuery] = useState("");
-  const { data, loading } = useApi<Politician[]>(query ? `/search?name=${encodeURIComponent(query)}` : null);
+  const { data, loading, error } = useApi<Politician[]>(query ? `/search?name=${encodeURIComponent(query)}` : null);
   return (
     <section>
       <h1 className="section-title">Search MPs</h1>
       <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Name, alias, party signal" className="mb-4 w-full rounded border border-line bg-white px-4 py-3" />
-      {loading && <p>Loading...</p>}
+      {loading && <LoadingText />}
+      {error && <EmptyState title="Search is unavailable" body="The API did not return search results. Source-backed profile pages remain unchanged; try again after the backend is healthy." />}
+      {query && data?.length === 0 && <EmptyState title="No matching MPs found" body="Only source-backed politician identities currently in the production dataset are searchable." />}
       <div className="grid gap-3 md:grid-cols-2">{data?.map((item) => <PoliticianCard key={item.id} item={item} navigate={navigate} />)}</div>
     </section>
   );
 }
 
 function PoliticianPage({ id }: { id: string }) {
-  const { data: person } = useApi<Politician>(`/politicians/${id}`);
+  const { data: person, error: personError } = useApi<Politician>(`/politicians/${id}`);
   const { data: committees } = useApi<CommitteeMembership[]>(`/politicians/${id}/committees`);
   const { data: attendance } = useApi<AttendanceSummary>(`/politicians/${id}/attendance`);
   const { data: documents } = useApi<DocumentMention[]>(`/politicians/${id}/documents?limit=20`);
   const { data: questions } = useApi<Question[]>(`/politicians/${id}/questions?limit=20`);
-  if (!person) return <p>Loading...</p>;
+  if (personError) return <EmptyState title="MP profile unavailable" body="The backend could not load this profile. No fallback or inferred record is shown." />;
+  if (!person) return <LoadingText />;
+  const partyLabel = confirmedPartyLabel(person.party);
   return (
     <section className="grid gap-6 lg:grid-cols-[.7fr_1.3fr]">
       <div className="rounded border border-line bg-white p-4">
         {person.photo_url && <img src={person.photo_url} alt={person.display_name} className="mb-4 aspect-square w-40 rounded object-cover" />}
         <h1 className="text-2xl font-semibold">{person.full_name}</h1>
-        <p className="text-slate-700">{person.party?.name}</p>
-        <EvidenceLink href={person.profile_url} label="People's Assembly profile" />
+        <p className="text-slate-700">{partyLabel}</p>
+        {!person.party || isUnknownParty(person.party) ? <p className="mt-2 text-sm text-slate-600">Party is not confirmed from the currently linked production records.</p> : null}
+        <EvidenceLink href={person.profile_url} label="Source profile" />
       </div>
       <div className="space-y-5">
-        <Panel title="Committees">{committees?.map((item) => <BasicCard key={item.id} title={item.committee.name} meta={item.role || "Member"} link={item.source_url} />)}</Panel>
+        <CoverageNotice />
+        <Panel title="Committees">
+          {committees === null ? <LoadingText /> : committees.length > 0 ? committees.map((item) => <BasicCard key={item.id} title={item.committee.name} meta={item.role || "Member"} link={item.source_url} />) : <EmptyState title="No linked committees yet" body="Committee memberships appear only when source records explicitly link this MP to a committee. Meeting backfill may still add links." />}
+        </Panel>
         <AttendancePanel data={attendance} />
-        <Panel title="PMG Evidence">{documents?.map((item) => <DocumentCard key={item.id} item={item.document} snippet={item.snippet} />)}</Panel>
-        <Panel title="Parliamentary Questions">{questions?.map((item) => <QuestionCard key={item.id} item={item} />)}</Panel>
+        <Panel title="PMG Evidence">
+          {documents === null ? <LoadingText /> : documents.length > 0 ? documents.map((item) => <DocumentCard key={item.id} item={item.document} snippet={item.snippet} />) : <EmptyState title="No linked PMG evidence yet" body="PMG documents are shown only when the mention can be linked to this MP with source evidence." />}
+        </Panel>
+        <Panel title="Parliamentary Questions">
+          {questions === null ? <LoadingText /> : questions.length > 0 ? questions.map((item) => <QuestionCard key={item.id} item={item} />) : <EmptyState title="No linked questions yet" body="Questions are still being backfilled and linked. This section stays empty rather than guessing which MP asked a question." />}
+        </Panel>
       </div>
     </section>
   );
@@ -197,20 +209,22 @@ function QualityPage() {
 }
 
 function DocumentPage({ id }: { id: string }) {
-  const { data } = useApi<DocumentDetail>(`/documents/${id}`);
-  if (!data) return <p>Loading...</p>;
-  return <section><h1 className="section-title">{data.title}</h1><BasicCard title={data.document_type} meta={[data.publication_date, data.committee_name].filter(Boolean).join(" | ")} link={data.source_url} /><Panel title="Mentioned MPs">{data.mentions.map((item) => <BasicCard key={item.id} title={item.politician.display_name} meta={`${item.match_reason || "match"} | ${item.confidence_score}`} extra={item.snippet} />)}</Panel></section>;
+  const { data, error } = useApi<DocumentDetail>(`/documents/${id}`);
+  if (error) return <EmptyState title="Document unavailable" body="The backend could not load this document, so no unsourced substitute is shown." />;
+  if (!data) return <LoadingText />;
+  return <section><h1 className="section-title">{data.title}</h1><BasicCard title={data.document_type} meta={[data.publication_date, data.committee_name].filter(Boolean).join(" | ")} link={data.source_url} /><Panel title="Mentioned MPs">{data.mentions.length > 0 ? data.mentions.map((item) => <BasicCard key={item.id} title={item.politician.display_name} meta={`${item.match_reason || "match"} | ${item.confidence_score}`} extra={item.snippet} />) : <EmptyState title="No linked MP mentions" body="This document is source-backed, but no MP mention has been confidently linked yet." />}</Panel></section>;
 }
 
 function QuestionPage({ id }: { id: string }) {
-  const { data } = useApi<QuestionDetail>(`/questions/${id}`);
-  if (!data) return <p>Loading...</p>;
-  return <section><h1 className="section-title">{data.title}</h1><BasicCard title={data.asked_by_name || "Question"} meta={[data.department, data.status, data.asked_date].filter(Boolean).join(" | ")} link={data.source_url} /><Panel title="Question"><p className="rounded border border-line bg-white p-4">{data.question_text || "No extracted question text."}</p></Panel><Panel title="Answer"><p className="rounded border border-line bg-white p-4">{data.answer_text || "No extracted answer text."}</p></Panel></section>;
+  const { data, error } = useApi<QuestionDetail>(`/questions/${id}`);
+  if (error) return <EmptyState title="Question unavailable" body="The backend could not load this question, so no inferred question record is shown." />;
+  if (!data) return <LoadingText />;
+  return <section><h1 className="section-title">{data.title}</h1><BasicCard title={data.asked_by_name || "Question asker not linked yet"} meta={[data.department, data.status, data.asked_date || "date not extracted yet"].filter(Boolean).join(" | ")} link={data.source_url} /><Panel title="Question"><p className="rounded border border-line bg-white p-4">{data.question_text || "Question text has not been extracted from the source document yet."}</p></Panel><Panel title="Answer"><p className="rounded border border-line bg-white p-4">{data.answer_text || "Answer text has not been extracted or published in the current source record yet."}</p></Panel></section>;
 }
 
 function ListPage<T>({ title, endpoint, render }: { title: string; endpoint: string; render: (item: T) => React.ReactNode }) {
-  const { data, loading } = useApi<T[]>(`${endpoint}?limit=100`);
-  return <section><h1 className="section-title">{title}</h1>{loading && <p>Loading...</p>}<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data?.map((item, index) => <React.Fragment key={index}>{render(item)}</React.Fragment>)}</div></section>;
+  const { data, loading, error } = useApi<T[]>(`${endpoint}?limit=100`);
+  return <section><h1 className="section-title">{title}</h1><ListCoverageNotice title={title} />{loading && <LoadingText />}{error && <EmptyState title={`${title} unavailable`} body="The backend did not return this dataset. Existing source-backed records are not replaced with placeholders." />}{data?.length === 0 && <EmptyState title={`No ${title.toLowerCase()} available yet`} body="This dataset is still being imported or linked. Empty results are shown honestly rather than filled with inferred records." />}<div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{data?.map((item, index) => <React.Fragment key={index}>{render(item)}</React.Fragment>)}</div></section>;
 }
 
 function QualitySummary({ compact = false }: { compact?: boolean }) {
@@ -225,7 +239,7 @@ function IssuePanel() {
 }
 
 function PoliticianCard({ item, navigate }: { item: Politician; navigate: (to: string) => void }) {
-  return <button onClick={() => navigate(`/politicians/${item.id}`)} className="rounded border border-line bg-white p-4 text-left hover:border-civic"><h2 className="font-semibold">{item.display_name}</h2><p className="text-sm text-slate-700">{item.party?.short_name || item.source_status || "MP"}</p></button>;
+  return <button onClick={() => navigate(`/politicians/${item.id}`)} className="rounded border border-line bg-white p-4 text-left hover:border-civic"><h2 className="font-semibold">{item.display_name}</h2><p className="text-sm text-slate-700">{confirmedPartyLabel(item.party, item.source_status || "Party not confirmed yet")}</p></button>;
 }
 
 function DocumentCard({ item, snippet, navigate }: { item: DocumentRead; snippet?: string; navigate?: (to: string) => void }) {
@@ -233,7 +247,7 @@ function DocumentCard({ item, snippet, navigate }: { item: DocumentRead; snippet
 }
 
 function QuestionCard({ item, navigate }: { item: Question; navigate?: (to: string) => void }) {
-  return <article className="rounded border border-line bg-white p-4"><button onClick={() => navigate?.(`/questions/${item.id}`)} className="text-left font-semibold hover:text-civic">{item.title}</button><p className="mt-1 text-sm text-slate-700">{[item.department, item.status, item.asked_date].filter(Boolean).join(" | ")}</p><EvidenceLink href={item.source_url} /></article>;
+  return <article className="rounded border border-line bg-white p-4"><button onClick={() => navigate?.(`/questions/${item.id}`)} className="text-left font-semibold hover:text-civic">{item.title || "Question title not extracted yet"}</button><p className="mt-1 text-sm text-slate-700">{[item.department, item.status, item.asked_date || "date not extracted yet"].filter(Boolean).join(" | ")}</p><EvidenceLink href={item.source_url} /></article>;
 }
 
 function BasicCard({ title, meta, link, extra }: { title: string; meta?: string; link?: string; extra?: string }) {
@@ -244,26 +258,63 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
   return <section><h2 className="mb-2 text-lg font-semibold">{title}</h2><div className="grid gap-3">{children}</div></section>;
 }
 
+function CoverageNotice() {
+  return (
+    <p className="rounded border border-line bg-white p-4 text-sm text-slate-700">
+      Profile sections show only source-backed records linked in production. PMG meetings, attendance, and parliamentary questions are still being backfilled, so missing sections mean "not linked yet", not "no activity".
+    </p>
+  );
+}
+
+function ListCoverageNotice({ title }: { title: string }) {
+  if (!["MPs", "Committees", "Parliamentary Questions"].includes(title)) return null;
+  return <p className="mb-4 rounded border border-line bg-white p-3 text-sm text-slate-700">This list reflects the records currently imported and linked in production. Coverage is improving as scheduled backfills run.</p>;
+}
+
+function EmptyState({ title, body }: { title: string; body: string }) {
+  return <div className="rounded border border-line bg-white p-4 text-sm"><p className="font-semibold">{title}</p><p className="mt-1 text-slate-700">{body}</p></div>;
+}
+
+function LoadingText() {
+  return <p className="text-sm text-slate-600">Loading source-backed data...</p>;
+}
+
 function EvidenceLink({ href, label = "Source" }: { href?: string; label?: string }) {
   if (!href) return null;
   return <a href={href} target="_blank" rel="noreferrer" className="mt-3 inline-flex items-center gap-1 text-sm font-medium text-civic hover:underline">{label}<ExternalLink size={14} /></a>;
 }
 
+function isUnknownParty(party?: Party) {
+  return !party || party.name.toLowerCase() === "unknown" || party.short_name.toLowerCase() === "unknown";
+}
+
+function confirmedPartyLabel(party?: Party, fallback = "Party not confirmed yet") {
+  if (isUnknownParty(party)) return fallback;
+  return party?.short_name || party?.name || fallback;
+}
+
 function useApi<T>(path: string | null) {
   const [data, setData] = useState<T | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (!path) {
       setData(null);
+      setError(null);
       return;
     }
     setLoading(true);
+    setError(null);
     fetch(`${API_BASE}${path}`)
       .then((response) => response.ok ? response.json() : Promise.reject(new Error(response.statusText)))
       .then(setData)
+      .catch((err: Error) => {
+        setData(null);
+        setError(err.message || "Request failed");
+      })
       .finally(() => setLoading(false));
   }, [path]);
-  return { data, loading };
+  return { data, loading, error };
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
