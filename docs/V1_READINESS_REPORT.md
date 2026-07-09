@@ -43,7 +43,7 @@ Latest evidence reviewed:
 ## Verification Notes
 
 - Party values are no longer all `Unknown`: scheduled ingestion artifacts show `parties=16`, including Democratic Alliance and MKP samples.
-- MP pages can show attendance: PR #78 added `/politicians/{id}/attendance`; production smoke already covers MP detail, committees, documents, questions, and search. PR4 adds honest empty states for missing linked attendance/questions/evidence.
+- MP pages can show attendance: PR #78 added `/politicians/{id}/attendance`; the smoke test now covers the attendance endpoint directly, and PR4 adds honest empty states for missing linked attendance/questions/evidence.
 - Questions have source-backed records and the docsjson metadata path is merged/tested. Current production artifacts still show many missing question dates, so the UI must say "date not extracted yet" where metadata has not populated a record.
 - Empty sections now explain "not linked yet" or "still being backfilled" rather than implying no activity.
 - Every public-facing card keeps source links where the backend provides them.
