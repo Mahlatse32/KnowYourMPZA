@@ -1,51 +1,57 @@
 # KnowYourMPZA V1 Readiness Report
 
-Last updated: 2026-07-06 (final launch gate review)
+Last updated: 2026-07-09
 
 ## Verdict
 
-NO-GO for public V1 today; **zero open engineering blockers** after PR #74. GO is a function of production backfill time plus the external deployment step. Full assessment and exact measurable GO conditions: `docs/V1_LAUNCH_ASSESSMENT.md` (see the 2026-07-06 gate review section).
+GO WITH KNOWN LIMITATIONS once PR4 (`codex/honest-empty-states`) is merged, CI is green, and the frontend is deployed from latest `main`.
 
-- PMG committee meetings: `12000/34710 = 34.57%`, growing ~4,400/day under the 2-hourly backfill — ETA ~3–4 days to the 80% threshold.
-- Parliament questions: `764/44036 = 1.73%` after the PR #74 verification run (`created=199` in run `28799811463`); previously frozen at 565 since 2026-07-05 by a poison binary document that failed every backfill run — ETA ~14–15 days to 80% at default bounds, or a human scope decision.
-- 2026-07-05 weekly ingestion run hit its 90-minute timeout in `run_weekly_ingestion.py` (identity-link recovery still pending post-backfill); watch the 2026-07-12 weekly run.
+The launch decision has shifted from "raw historical coverage only" to "first-time user value with honest scope." Production now has enough source-backed data for a user to understand an MP profile, party affiliation where known, committee service, PMG attendance/work evidence, and verification links. The remaining limitations must be visible in the UI and launch copy.
 
-## Evidence Reviewed
+## Product-Readiness Sequence
 
-- Scheduled ingestion run `28711148489` (`main`, 2026-07-04): **first fully green daily+weekly dispatch** since launch hardening — daily completed end-to-end including question ingestion; weekly green with the PA systemic block handled as enrichment-only.
-- PMG meeting backfill run `28710353108` (`main`, 2026-07-04): completed in 52 minutes under the 90-minute timeout; durable cursor advanced `page 70 → 80`, `last_status=completed`.
-- Earlier same-day runs `28708377083` and `28708619234`: proved ingestion volume works (+374 meetings / +4,603 attendance in 25 minutes) and isolated the two hang/timeout root causes now fixed.
-- Latest `main` CI green (full backend suite vs PostgreSQL 16 + migrations; frontend build).
-- Artifacts: `inspect_db.json`, `data_coverage_dashboard.json`, `data_quality_checks.json`, `frontend_smoke_report.json` (**pass**, twice), `parliamentary_questions_ingestion_summary.json`, `v1_readiness_report.json`.
-
-## Production Readiness Summary
-
-| Area | Status | Notes |
+| Slice | Status | Evidence |
 |---|---|---|
-| Identity tables | green | `politicians=521`, `committees=34`, `memberships=521`, 0 unresolved entities. |
-| Scheduled daily ingestion | green | Run `28711148489` fully green — the docsjson discovery hang (API ignores `page`; only `offset` paginates) fixed in PR #70. |
-| Scheduled weekly ingestion | green | PA systemic 403 handled as enrichment-only (PR #68); PMG fallback keeps identity correctness. |
-| PMG bills | green | `1171/1246 = 93.98%`. |
-| PMG committee meetings | red → recovering | `3915/34710 = 11.28%`; backfill verified end-to-end (timeout fix PR #69), cursor advancing, ~6,000/day. |
-| Parliament questions | red → recovering | `189/44036 = 0.43%`; growth mechanism verified; 2-hourly backfill (PR #72) live. |
-| Frontend production smoke | green | `overall_status=pass` in both of today's production artifact sets. |
-| Data quality gate | amber | Remaining fails: 2 zombie `running` rows (finalizer merged in PR #71, clears next run) and identity-link lag behind the backfill (recovers with the weekly bootstrap). |
-| Operations | green | Rollback runbook, persistent-DB runbook, sweep runbook, PA fallback runbook; every run self-verifies with uploaded artifacts. |
+| PR1 party enrichment | merged | PR #76; production `parties=16`, with samples including Democratic Alliance and MKP rather than only `Unknown`. |
+| PR2 question metadata | merged | PR #77; tests cover docsjson title/date/status enrichment; latest questions backfill run `28995667052` updated 194 question records and completed successfully. |
+| PR3 attendance endpoint and MP panel | merged | PR #78; CI run `28998338744` passed backend and frontend. |
+| PR4 honest empty states and coverage notices | in progress | Branch `codex/honest-empty-states`; frontend build passes locally. |
 
-## Scheduler State
+## Production Evidence
 
-From backfill run `28710353108` artifacts (2026-07-04 16:19 UTC):
+Latest evidence reviewed:
 
-| Stream | Next page | Source total | Total seen | Failed | Last status |
-|---|---:|---:|---:|---:|---|
-| pmg_committee_meetings | 80 | 34710 | 4000 | 17 | **completed** |
+- PMG meeting backfill run `28994456199`, `main@211bfa5`, completed successfully on 2026-07-09.
+- Parliament questions backfill run `28995667052`, `main@211bfa5`, completed successfully on 2026-07-09.
+- Scheduled ingestion run `28921400351`, `main@211bfa5`, completed successfully on 2026-07-08.
+- Main CI after PR #78 merge: `28998338744`, passed backend and frontend.
 
-Cursor safety was verified under mid-run cancellation (cursor untouched, idempotent re-sweep) and under completion (cursor advanced).
+| Dataset | Production count | Source total | Coverage | User-facing status |
+|---|---:|---:|---:|---|
+| Politicians | 521 | PMG-derived identity set | n/a | enough for MP profile browsing; not an all-MP completeness claim |
+| Parties | 16 | source-observed PMG parties | n/a | improved from all `Unknown`; some MPs may still be unconfirmed |
+| Committees | 34 | PMG-derived committees | n/a | enough to show committee context |
+| Committee memberships | 521 | PMG-derived memberships | n/a | enough to answer committee service for linked MPs |
+| Committee meetings | 22,656 | 34,713 PMG meetings | 65.27% | useful and growing; historical corpus still incomplete |
+| Committee attendance | 209,192 | follows meetings | n/a | enough to show MP attendance where linked |
+| PMG bills | 1,171 | 1,246 PMG bills | 93.98% | acceptable for V1 |
+| Parliamentary questions | 3,994 | 44,036 docsjson records | 9.07% | useful sample; full historical coverage still incomplete |
+| Vote events | 897 | not established | n/a | visible as PMG evidence where present |
+| Vote records | 5 | explicit named votes only | n/a | known limitation |
+| Unresolved entities | 7 | 0 target | n/a | low, warn-level; no completeness claim |
 
-## Launch-Blocking Items Remaining
+## Verification Notes
 
-1. **Production time**: meetings backfill to ≥ 27,768 (~4–5 days); questions backfill to ≥ 35,229 (~15–16 days) or an explicit human scope decision for V1 questions.
-2. **Identity-link recovery after backfill**: run (or wait for) the weekly PMG identity bootstrap so meeting/attendance link coverage returns under thresholds.
-3. **Public deployment** (external): backend/frontend deployment per `README.md` is a human infrastructure action; no deployed URL exists in the repository.
+- Party values are no longer all `Unknown`: scheduled ingestion artifacts show `parties=16`, including Democratic Alliance and MKP samples.
+- MP pages can show attendance: PR #78 added `/politicians/{id}/attendance`; production smoke already covers MP detail, committees, documents, questions, and search. PR4 adds honest empty states for missing linked attendance/questions/evidence.
+- Questions have source-backed records and the docsjson metadata path is merged/tested. Current production artifacts still show many missing question dates, so the UI must say "date not extracted yet" where metadata has not populated a record.
+- Empty sections now explain "not linked yet" or "still being backfilled" rather than implying no activity.
+- Every public-facing card keeps source links where the backend provides them.
 
-No V1.1 or V2 feature work should be accepted until GO is declared or the coverage scope is explicitly re-cut.
+## Remaining Limits
+
+- Do not claim all MPs, all questions, all votes, or complete attendance rates.
+- Parliament question coverage is still low against the full 44,036 docsjson denominator.
+- PMG meeting coverage is useful but not yet at the historical 80% gate.
+- Some party affiliations remain unconfirmed until source-backed enrichment touches those MPs.
+- Public launch still requires the latest frontend/backend deployment from `main`.
