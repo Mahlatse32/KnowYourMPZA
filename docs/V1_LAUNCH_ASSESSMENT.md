@@ -4,7 +4,7 @@ Assessment date: 2026-07-09
 
 ## Recommendation
 
-GO WITH KNOWN LIMITATIONS, pending PR4 merge/CI and deployment from latest `main`.
+GO WITH KNOWN LIMITATIONS, pending deployment from latest `main`.
 
 The product is now valuable for a first-time public user because the MP profile journey can answer the core questions with source-backed evidence. The main remaining risk is over-claiming completeness. PR4 addresses that by making empty and partial sections explicit in the UI.
 
@@ -13,6 +13,8 @@ The product is now valuable for a first-time public user because the MP profile 
 - PR #76 merged: party enrichment from explicit PMG attendance data.
 - PR #77 merged: question docsjson metadata enrichment.
 - PR #78 merged: MP attendance endpoint and frontend panel; CI run `28998338744` passed.
+- PR #79 merged: honest empty states and coverage notices; CI run `28998693007` passed.
+- PR #80 merged: direct attendance endpoint coverage in production smoke; CI run `28998884475` passed.
 - PMG meeting backfill run `28994456199`: `22656/34713 = 65.27%`, cursor completed at page 462.
 - Parliament questions backfill run `28995667052`: `3994/44036 = 9.07%`, `processed=194`, `updated=194`, `failed=6` permanent 404s, workflow green.
 - Scheduled ingestion run `28921400351`: frontend production smoke `15/15` checks passed.
@@ -38,8 +40,8 @@ The product is now valuable for a first-time public user because the MP profile 
 
 ## Launch Conditions
 
-1. Merge PR4 with green CI.
-2. Deploy backend/frontend from latest `main`.
+1. Deploy backend/frontend from latest `main`.
+2. Complete `DEPLOYMENT_CHECKLIST.md`.
 3. Verify production smoke after deployment.
 4. Keep the PMG meeting and Parliament questions backfill workflows running.
 5. Use launch copy that says coverage is source-backed and still expanding.
