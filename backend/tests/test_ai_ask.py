@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.models.ai_answer import AiAnswer
+from app.services.ai_service import _clean_parliament_question_text
 
 importlib.import_module("app.models")
 
@@ -109,7 +110,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 4
+    assert body["data_snapshot"]["ai_answer_format_version"] == 5
 
 
 def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
@@ -127,7 +128,23 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 4
+    assert body["data_snapshot"]["ai_answer_format_version"] == 5
+
+
+def test_ai_question_evidence_text_is_cleaned_before_answering():
+    raw = (
+        "NATIONAL ASSEMBLY QUESTION 1025 NW1153E NATIONAL ASSEMBLY FOR WRITTEN REPLY "
+        "QUESTION NO 1025 DATE OF PUBLICATION IN INTERNAL QUESTION PAPER: 06 MARCH 2026 "
+        "1025. Ms M Dlamini (EFF) to ask the Minister of Water and Sanitation: "
+        "Whether Eskom substations require urgent maintenance?"
+    )
+
+    cleaned = _clean_parliament_question_text(raw, "Ms M Dlamini (EFF)")
+
+    assert cleaned is not None
+    assert cleaned.startswith("asked the Minister of Water and Sanitation")
+    assert "NATIONAL ASSEMBLY QUESTION" not in cleaned
+    assert "to ask the Ministe..." not in cleaned
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
