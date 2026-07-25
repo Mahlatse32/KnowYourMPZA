@@ -23,6 +23,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
+AI_ANSWER_FORMAT_VERSION = 2
 
 
 @dataclass
@@ -146,6 +147,7 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
 
 def _data_snapshot(db: Session) -> dict[str, int]:
     return {
+        "ai_answer_format_version": AI_ANSWER_FORMAT_VERSION,
         "politicians": db.scalar(select(func.count()).select_from(Politician)) or 0,
         "committees": db.scalar(select(func.count()).select_from(Committee)) or 0,
         "committee_meetings": db.scalar(select(func.count()).select_from(CommitteeMeeting)) or 0,
@@ -181,7 +183,12 @@ def _search_terms(question: str) -> list[str]:
         "from",
         "have",
         "into",
+        "mp",
+        "mps",
         "mentioning",
+        "question",
+        "questions",
+        "asked",
         "show",
         "the",
         "their",
@@ -343,6 +350,8 @@ def _politician_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
 def _question_to_source(item: ParliamentaryQuestion) -> dict[str, Any]:
     title = item.title or item.question_number or "Parliamentary question"
     asker = item.politician.display_name if item.politician else item.asked_by_name
+    if not asker:
+        asker = _infer_question_asker(" ".join(part for part in [item.question_text, item.answer_text] if part))
     excerpt = " | ".join(
         part
         for part in [
@@ -360,6 +369,9 @@ def _question_to_source(item: ParliamentaryQuestion) -> dict[str, Any]:
         "record_id": str(item.id),
         "date": item.asked_date.isoformat() if item.asked_date else None,
         "excerpt": _excerpt(excerpt),
+        "asked_by": asker,
+        "department": item.department,
+        "status": item.status,
     }
 
 
@@ -369,6 +381,8 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
             "I could not find source-backed KnowYourMPZA records that answer this question yet. "
             f"{evidence.coverage_notice}"
         )
+    if evidence.intent == "questions":
+        return _build_question_answer(question, evidence)
     lines = [
         f"Based on the source-backed records currently imported, I found {len(evidence.sources)} relevant record"
         f"{'' if len(evidence.sources) == 1 else 's'} for: {question}",
@@ -379,6 +393,89 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
     lines.append(evidence.coverage_notice)
     lines.append("Open the attached sources to verify each record.")
     return "\n".join(lines)
+
+
+def _build_question_answer(question: str, evidence: RetrievedEvidence) -> str:
+    source_count = len(evidence.sources)
+    asker_names = _unique_values(source.get("asked_by") for source in evidence.sources)
+    topic = _topic_from_question(question)
+    if asker_names:
+        named = _join_human(asker_names[:5])
+        intro = (
+            f"I found {source_count} imported parliamentary question record"
+            f"{'' if source_count == 1 else 's'} mentioning {topic}. "
+            f"The records include questions from {named}."
+        )
+    else:
+        intro = (
+            f"I found {source_count} imported parliamentary question record"
+            f"{'' if source_count == 1 else 's'} mentioning {topic}, but the MP names are not linked cleanly yet."
+        )
+
+    lines = [intro, "", "Relevant source-backed records:"]
+    for source in evidence.sources[:5]:
+        asker = source.get("asked_by") or "MP not yet linked"
+        detail_parts = [source.get("department"), source.get("status"), source.get("date")]
+        detail = ", ".join(str(part) for part in detail_parts if part)
+        title = _clean_question_title(source["title"])
+        if detail:
+            lines.append(f"- {asker}: {title} ({detail})")
+        else:
+            lines.append(f"- {asker}: {title}")
+
+    if source_count > 5:
+        lines.append(f"- Plus {source_count - 5} more matching imported records.")
+    lines.extend(["", evidence.coverage_notice, "Use the source links below to verify each record."])
+    return "\n".join(lines)
+
+
+def _infer_question_asker(text: str) -> str | None:
+    if not text:
+        return None
+    patterns = [
+        r"\b(?:Mr|Ms|Mrs|Dr|Adv|Prof|Hon)\s+[A-Z][A-Za-z .'-]{2,90}\s+\([^)]+\)\s+to ask",
+        r"\b(?:Mr|Ms|Mrs|Dr|Adv|Prof|Hon)\s+[A-Z][A-Za-z .'-]{2,90}\s+to ask",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return re.sub(r"\s+to ask$", "", match.group(0), flags=re.IGNORECASE).strip()
+    return None
+
+
+def _topic_from_question(question: str) -> str:
+    terms = _search_terms(question)
+    if terms:
+        return terms[-1].title()
+    return "this topic"
+
+
+def _clean_question_title(title: str) -> str:
+    cleaned = re.sub(r"\s+", " ", title).strip()
+    cleaned = cleaned.replace("Written question reply", "Written question")
+    return cleaned
+
+
+def _unique_values(values: Any) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        normalized = re.sub(r"\s+", " ", str(value)).strip()
+        key = normalized.lower()
+        if key not in seen:
+            unique.append(normalized)
+            seen.add(key)
+    return unique
+
+
+def _join_human(values: list[str]) -> str:
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} and {values[1]}"
+    return f"{', '.join(values[:-1])}, and {values[-1]}"
 
 
 def _coverage_notice(intent: str, has_sources: bool) -> str:

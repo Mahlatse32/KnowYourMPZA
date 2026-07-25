@@ -16,6 +16,9 @@ class AiSource(BaseModel):
     record_id: str
     date: str | None = None
     excerpt: str | None = None
+    asked_by: str | None = None
+    department: str | None = None
+    status: str | None = None
 
 
 class AiAskResponse(BaseModel):
