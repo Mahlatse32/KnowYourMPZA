@@ -25,7 +25,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 7
+AI_ANSWER_FORMAT_VERSION = 8
 
 
 @dataclass
@@ -875,13 +875,19 @@ def _clean_question_title(title: str) -> str:
 def _clean_display_text(value: str | None) -> str:
     if not value:
         return ""
-    return (
-        re.sub(r"\s+", " ", value)
-        .strip()
-        .replace("â", "'")
-        .replace("â", "-")
-        .replace("—", "-")
-    )
+    cleaned = re.sub(r"\s+", " ", value).strip()
+    replacements = {
+        "â": "'",
+        "Ã¢ÂÂ": "'",
+        "â€™": "'",
+        "â": "-",
+        "Ã¢ÂÂ": "-",
+        "â€”": "-",
+        "—": "-",
+    }
+    for bad, good in replacements.items():
+        cleaned = cleaned.replace(bad, good)
+    return cleaned
 
 
 def _is_unknown_label(value: str | None) -> bool:
