@@ -7,6 +7,8 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base, get_db
 from app.main import app
+from app.models.committee import Committee
+from app.models.committee_membership import CommitteeMembership
 from app.models.ai_answer import AiAnswer
 from app.models.party import Party
 from app.models.politician import Politician
@@ -112,7 +114,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 6
+    assert body["data_snapshot"]["ai_answer_format_version"] == 7
 
 
 def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
@@ -130,7 +132,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 6
+    assert body["data_snapshot"]["ai_answer_format_version"] == 7
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -199,7 +201,47 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 6
+    assert body["data_snapshot"]["ai_answer_format_version"] == 7
+
+
+def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
+    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    party = Party(name="African National Congress", short_name="ANC")
+    db_session.add(party)
+    db_session.flush()
+    politician = Politician(
+        full_name="Example Police Member",
+        display_name="E Police",
+        slug="e-police",
+        party_id=party.id,
+        profile_url="https://example.test/e-police",
+        source_status="TEST",
+    )
+    committee = Committee(
+        name="Police",
+        slug="police",
+        source_url="https://example.test/committee/police",
+    )
+    db_session.add_all([politician, committee])
+    db_session.flush()
+    db_session.add(
+        CommitteeMembership(
+            politician_id=politician.id,
+            committee_id=committee.id,
+            role="Member",
+            source_url="https://example.test/committee/police",
+        )
+    )
+    db_session.commit()
+
+    response = client.post("/ai/ask", json={"question": "Who sits on the police committee?"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "committees"
+    assert "linked member record" in body["answer"]
+    assert "E Police (ANC, Member)" in body["answer"]
+    assert "Agriculture" not in body["answer"]
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
