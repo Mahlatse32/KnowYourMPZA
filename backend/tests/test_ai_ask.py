@@ -71,8 +71,13 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert body["model_used"] == "deterministic-source-summary"
     assert body["cached"] is False
     assert "Eskom" in body["answer"]
+    assert "The records include questions from Julius Malema" in body["answer"]
+    assert "Relevant source-backed records:" in body["answer"]
+    assert "NATIONAL ASSEMBLY QUESTION" not in body["answer"]
     assert any(source["source_url"] == source_url for source in body["sources"])
+    assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
+    assert body["data_snapshot"]["ai_answer_format_version"] == 2
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
