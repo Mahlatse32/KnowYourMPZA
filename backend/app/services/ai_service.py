@@ -25,7 +25,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 8
+AI_ANSWER_FORMAT_VERSION = 9
 
 
 @dataclass
@@ -880,6 +880,8 @@ def _clean_display_text(value: str | None) -> str:
         "â": "'",
         "Ã¢ÂÂ": "'",
         "â€™": "'",
+        "’": "'",
+        "‘": "'",
         "â": "-",
         "Ã¢ÂÂ": "-",
         "â€”": "-",
