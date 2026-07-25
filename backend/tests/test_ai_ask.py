@@ -12,7 +12,7 @@ from app.models.committee_membership import CommitteeMembership
 from app.models.ai_answer import AiAnswer
 from app.models.party import Party
 from app.models.politician import Politician
-from app.services.ai_service import _clean_display_text, _clean_parliament_question_text
+from app.services.ai_service import RetrievedEvidence, _ask_openai, _clean_display_text, _clean_parliament_question_text
 
 importlib.import_module("app.models")
 
@@ -114,7 +114,8 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 9
+    assert body["data_snapshot"]["ai_answer_format_version"] == 10
+    assert body["data_snapshot"]["openai_configured"] == 0
 
 
 def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
@@ -132,7 +133,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 9
+    assert body["data_snapshot"]["ai_answer_format_version"] == 10
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -155,6 +156,82 @@ def test_ai_display_text_cleans_common_mojibake():
     assert _clean_display_text("Ethics and Membersâ Interest") == "Ethics and Members' Interest"
     assert _clean_display_text("Ethics and Members’ Interest") == "Ethics and Members' Interest"
     assert _clean_display_text("Question Ã¢ÂÂ reply") == "Question - reply"
+
+
+def test_ai_ask_uses_openai_when_configured(monkeypatch):
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"output_text": "A source-backed OpenAI answer."}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "  'test-key'  ")
+    monkeypatch.setattr("app.services.ai_service.settings.openai_model", "gpt-test")
+    monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
+
+    answer, model_used = _ask_openai(
+        "who is julius malema?",
+        RetrievedEvidence(intent="profile", sources=[{"title": "J Malema"}], coverage_notice=""),
+        "fallback",
+    )
+
+    assert answer == "A source-backed OpenAI answer."
+    assert model_used == "gpt-test"
+
+
+def test_ai_ask_falls_back_to_chat_completions_when_responses_fails(monkeypatch):
+    class FakeResponse:
+        def __init__(self, status_code, body):
+            self.status_code = status_code
+            self._body = body
+            self.is_success = status_code < 400
+            self.text = str(body)
+
+        def json(self):
+            return self._body
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, url, *args, **kwargs):
+            if url.endswith("/responses"):
+                return FakeResponse(400, {"error": "not supported"})
+            return FakeResponse(200, {"choices": [{"message": {"content": "Chat fallback answer."}}]})
+
+    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "test-key")
+    monkeypatch.setattr("app.services.ai_service.settings.openai_model", "gpt-test")
+    monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
+
+    answer, model_used = _ask_openai(
+        "who is julius malema?",
+        RetrievedEvidence(intent="profile", sources=[{"title": "J Malema"}], coverage_notice=""),
+        "fallback",
+    )
+
+    assert answer == "Chat fallback answer."
+    assert model_used == "gpt-test"
 
 
 def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monkeypatch):
@@ -207,7 +284,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 9
+    assert body["data_snapshot"]["ai_answer_format_version"] == 10
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -25,7 +26,8 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 9
+AI_ANSWER_FORMAT_VERSION = 10
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -112,60 +114,111 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
 
 
 def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str) -> tuple[str, str]:
-    if not settings.openai_api_key:
+    api_key = _openai_api_key()
+    if not api_key:
         return fallback_answer, "deterministic-source-summary"
 
-    payload = {
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "You are KnowYourMPZA's civic evidence assistant. Answer only from the supplied records. "
+                "Do not add facts that are not present. If evidence is incomplete, say so plainly. "
+                "Keep the answer concise and mention that sources are attached."
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"Question: {question}\n"
+                f"Intent: {evidence.intent}\n"
+                f"Coverage notice: {evidence.coverage_notice}\n"
+                f"Records: {evidence.sources}"
+            ),
+        },
+    ]
+    responses_payload = {
         "model": settings.openai_model,
-        "input": [
-            {
-                "role": "system",
-                "content": (
-                    "You are KnowYourMPZA's civic evidence assistant. Answer only from the supplied records. "
-                    "Do not add facts that are not present. If evidence is incomplete, say so plainly. "
-                    "Keep the answer concise and mention that sources are attached."
-                ),
-            },
-            {
-                "role": "user",
-                "content": (
-                    f"Question: {question}\n"
-                    f"Intent: {evidence.intent}\n"
-                    f"Coverage notice: {evidence.coverage_notice}\n"
-                    f"Records: {evidence.sources}"
-                ),
-            },
-        ],
+        "input": messages,
     }
     try:
         with httpx.Client(timeout=30) as client:
             response = client.post(
                 f"{settings.openai_base_url.rstrip('/')}/responses",
                 headers={
-                    "Authorization": f"Bearer {settings.openai_api_key}",
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json=payload,
+                json=responses_payload,
             )
-            response.raise_for_status()
-            body = response.json()
+            if response.is_success:
+                body = response.json()
+                output = _openai_responses_text(body)
+                if output:
+                    return output, settings.openai_model
+                logger.warning("OpenAI Responses API returned no answer text for model %s", settings.openai_model)
+            else:
+                _log_openai_failure("Responses API", response)
+
+            chat_response = client.post(
+                f"{settings.openai_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": settings.openai_model, "messages": messages},
+            )
+            if chat_response.is_success:
+                output = _openai_chat_text(chat_response.json())
+                if output:
+                    return output, settings.openai_model
+                logger.warning("OpenAI Chat Completions API returned no answer text for model %s", settings.openai_model)
+            else:
+                _log_openai_failure("Chat Completions API", chat_response)
     except Exception:
+        logger.exception("OpenAI answer generation failed for model %s; using deterministic fallback", settings.openai_model)
         return fallback_answer, "deterministic-source-summary"
 
+    return fallback_answer, "deterministic-source-summary"
+
+
+def _openai_responses_text(body: dict[str, Any]) -> str | None:
     output_text = body.get("output_text")
     if isinstance(output_text, str) and output_text.strip():
-        return output_text.strip(), settings.openai_model
+        return output_text.strip()
     for item in body.get("output", []):
         for content in item.get("content", []):
             text = content.get("text")
             if isinstance(text, str) and text.strip():
-                return text.strip(), settings.openai_model
-    return fallback_answer, "deterministic-source-summary"
+                return text.strip()
+    return None
+
+
+def _openai_chat_text(body: dict[str, Any]) -> str | None:
+    for choice in body.get("choices", []):
+        message = choice.get("message") or {}
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content.strip()
+    return None
+
+
+def _log_openai_failure(api_name: str, response: httpx.Response) -> None:
+    body_snippet = response.text[:500] if response.text else ""
+    logger.warning(
+        "OpenAI %s request failed for model %s with status %s: %s",
+        api_name,
+        settings.openai_model,
+        response.status_code,
+        body_snippet,
+    )
 
 
 def _data_snapshot(db: Session) -> dict[str, int]:
     return {
         "ai_answer_format_version": AI_ANSWER_FORMAT_VERSION,
+        "openai_configured": 1 if _openai_api_key() else 0,
+        "openai_model_fingerprint": _stable_text_fingerprint(settings.openai_model),
         "politicians": db.scalar(select(func.count()).select_from(Politician)) or 0,
         "committees": db.scalar(select(func.count()).select_from(Committee)) or 0,
         "committee_meetings": db.scalar(select(func.count()).select_from(CommitteeMeeting)) or 0,
@@ -174,6 +227,17 @@ def _data_snapshot(db: Session) -> dict[str, int]:
         "bills": db.scalar(select(func.count()).select_from(Bill)) or 0,
         "vote_events": db.scalar(select(func.count()).select_from(VoteEvent)) or 0,
     }
+
+
+def _openai_api_key() -> str:
+    return settings.openai_api_key.strip().strip('"').strip("'")
+
+
+def _stable_text_fingerprint(value: str) -> int:
+    fingerprint = 0
+    for char in value:
+        fingerprint = (fingerprint * 31 + ord(char)) % 1_000_000_007
+    return fingerprint
 
 
 def _classify_intent(question: str) -> str:
