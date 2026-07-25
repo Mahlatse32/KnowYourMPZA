@@ -1,0 +1,132 @@
+name: Render backend launch
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RENDER_OWNER_ID: tea-d8hdjugg4nts73f26ceg
+      RENDER_SERVICE_NAME: knowyourmpza-api
+      RENDER_REPO: https://github.com/Mahlatse32/KnowYourMPZA
+      RENDER_BRANCH: main
+      RENDER_CORS_ORIGIN: https://knowyourmpza.vercel.app
+      RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+      SUPABASE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+    steps:
+      - name: Verify required secrets
+        run: |
+          if [ -z "$RENDER_API_KEY" ]; then
+            echo "::error::RENDER_API_KEY secret is not configured."
+            exit 1
+          fi
+          if [ -z "$SUPABASE_DATABASE_URL" ]; then
+            echo "::error::DATABASE_URL secret is not configured."
+            exit 1
+          fi
+          echo "Required launch secrets are configured."
+
+      - name: Create or find Render backend service
+        id: render
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          api_key = os.environ["RENDER_API_KEY"]
+          owner_id = os.environ["RENDER_OWNER_ID"]
+          service_name = os.environ["RENDER_SERVICE_NAME"]
+
+          headers = {
+              "Accept": "application/json",
+              "Authorization": f"Bearer {api_key}",
+              "Content-Type": "application/json",
+          }
+
+          def request(method, path, payload=None):
+              data = None if payload is None else json.dumps(payload).encode("utf-8")
+              req = urllib.request.Request(
+                  f"https://api.render.com/v1{path}",
+                  data=data,
+                  method=method,
+                  headers=headers,
+              )
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      body = resp.read().decode("utf-8")
+                      return json.loads(body) if body else {}
+              except urllib.error.HTTPError as exc:
+                  body = exc.read().decode("utf-8", errors="replace")
+                  print(f"Render API {method} {path} failed: HTTP {exc.code} {body}", file=sys.stderr)
+                  raise
+
+          services = request("GET", f"/services?limit=100&ownerId={owner_id}")
+          for item in services:
+              service = item.get("service", item)
+              if service.get("name") == service_name:
+                  url = service.get("serviceDetails", {}).get("url", "")
+                  service_id = service.get("id", "")
+                  print(f"Render service already exists: {service_id} {url}")
+                  with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                      out.write(f"service_id={service_id}\n")
+                      out.write(f"service_url={url}\n")
+                      out.write("created=false\n")
+                  break
+          else:
+              payload = {
+                  "type": "web_service",
+                  "name": service_name,
+                  "ownerId": owner_id,
+                  "repo": os.environ["RENDER_REPO"],
+                  "branch": os.environ["RENDER_BRANCH"],
+                  "rootDir": "backend",
+                  "autoDeploy": "yes",
+                  "envVars": [
+                      {"key": "DATABASE_URL", "value": os.environ["SUPABASE_DATABASE_URL"]},
+                      {"key": "ENVIRONMENT", "value": "production"},
+                      {"key": "CORS_ORIGIN", "value": os.environ["RENDER_CORS_ORIGIN"]},
+                      {"key": "INGESTION_ENABLED", "value": "false"},
+                  ],
+                  "serviceDetails": {
+                      "runtime": "docker",
+                      "plan": "free",
+                      "region": "oregon",
+                      "numInstances": 1,
+                      "healthCheckPath": "/health",
+                      "envSpecificDetails": {
+                          "dockerfilePath": "Dockerfile",
+                          "dockerContext": ".",
+                      },
+                  },
+              }
+              created = request("POST", "/services", payload)
+              service = created.get("service", created)
+              url = service.get("serviceDetails", {}).get("url", "")
+              service_id = service.get("id", "")
+              print(f"Created Render service: {service_id} {url}")
+              with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+                  out.write(f"service_id={service_id}\n")
+                  out.write(f"service_url={url}\n")
+                  out.write("created=true\n")
+          PY
+
+      - name: Summary
+        run: |
+          {
+            echo "## Render backend launch"
+            echo
+            echo "- Service ID: ${{ steps.render.outputs.service_id }}"
+            echo "- Service URL: ${{ steps.render.outputs.service_url }}"
+            echo "- Created: ${{ steps.render.outputs.created }}"
+            echo
+            echo "DATABASE_URL was passed as a secret and not printed."
+          } >> "$GITHUB_STEP_SUMMARY"

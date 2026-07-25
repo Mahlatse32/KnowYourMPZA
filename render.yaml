@@ -5,8 +5,8 @@ services:
     repo: https://github.com/Mahlatse32/KnowYourMPZA
     branch: main
     rootDir: backend
-    dockerfilePath: backend/Dockerfile
-    dockerContext: backend
+    dockerfilePath: Dockerfile
+    dockerContext: .
     plan: free
     region: oregon
     healthCheckPath: /health
