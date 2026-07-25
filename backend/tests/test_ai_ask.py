@@ -44,7 +44,7 @@ def _ingest_eskom_question(monkeypatch, db_session):
     url = "https://www.parliament.gov.za/question/test-ai-eskom-001"
     html = """
     <html><body>
-      <h1>Written question about Eskom maintenance</h1>
+      <h1>Written question reply NW-AI-1 â Eskom maintenance</h1>
       <p>Question Number: NW-AI-1</p>
       <p>Asked By: Julius Malema</p>
       <p>Department: Electricity</p>
@@ -74,6 +74,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert "The records include questions from Julius Malema" in body["answer"]
     assert "Relevant source-backed records:" in body["answer"]
     assert "NATIONAL ASSEMBLY QUESTION" not in body["answer"]
+    assert "â" not in body["answer"]
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
