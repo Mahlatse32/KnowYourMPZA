@@ -453,6 +453,7 @@ def _topic_from_question(question: str) -> str:
 def _clean_question_title(title: str) -> str:
     cleaned = re.sub(r"\s+", " ", title).strip()
     cleaned = cleaned.replace("Written question reply", "Written question")
+    cleaned = cleaned.replace("â", "-").replace("—", "-")
     return cleaned
 
 
