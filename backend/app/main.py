@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.routers import (
+    ai,
     bills,
     committees,
     documents,
@@ -34,6 +35,7 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+app.include_router(ai.router)
 app.include_router(politicians.router)
 app.include_router(committees.router)
 app.include_router(documents.router)

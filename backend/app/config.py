@@ -15,6 +15,9 @@ class Settings(BaseSettings):
         default="https://www.pa.org.za/position/member/parliament/",
         validation_alias="PEOPLE_ASSEMBLY_MEMBER_LIST_URLS",
     )
+    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
+    openai_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_MODEL")
+    openai_base_url: str = Field(default="https://api.openai.com/v1", validation_alias="OPENAI_BASE_URL")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

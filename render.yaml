@@ -20,3 +20,7 @@ services:
         value: https://knowyourmpza.vercel.app
       - key: INGESTION_ENABLED
         value: "false"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_MODEL
+        value: gpt-5-mini
