@@ -15,15 +15,17 @@ from app.models.bill import Bill
 from app.models.committee import Committee
 from app.models.committee_attendance import CommitteeAttendance
 from app.models.committee_meeting import CommitteeMeeting
+from app.models.committee_membership import CommitteeMembership
 from app.models.parliamentary_question import ParliamentaryQuestion
 from app.models.party import Party
 from app.models.politician import Politician
+from app.models.politician_alias import PoliticianAlias
 from app.models.vote_event import VoteEvent
 
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 5
+AI_ANSWER_FORMAT_VERSION = 6
 
 
 @dataclass
@@ -86,6 +88,9 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
         sources = _vote_sources(db, terms)
     elif intent == "attendance":
         sources = _attendance_sources(db, terms)
+    elif intent == "profile":
+        subject = _profile_subject(question) or " ".join(terms)
+        sources = _profile_sources(db, subject)
     else:
         sources = _politician_sources(db, terms)
         if len(sources) < 3:
@@ -96,7 +101,7 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
         intent=intent,
         sources=sources,
         coverage_notice=_coverage_notice(intent, bool(sources)),
-        subject=subject,
+        subject=subject or (_profile_subject(question) if intent == "profile" else None),
         topic=_topic_from_terms(topic_terms),
         answer_kind="questions_by_person_topic" if asker_terms and topic_terms and intent == "questions" else "general",
     )
@@ -169,6 +174,8 @@ def _data_snapshot(db: Session) -> dict[str, int]:
 
 def _classify_intent(question: str) -> str:
     text = question.lower()
+    if re.search(r"\b(who is|who's|tell me about|profile of|what is known about)\b", text):
+        return "profile"
     if any(word in text for word in ["question", "asked", " ask ", "minister", "department"]):
         return "questions"
     if any(word in text for word in ["attendance", "attend", "absent", "apology", "present"]):
@@ -204,6 +211,10 @@ def _search_terms(question: str) -> list[str]:
         "the",
         "their",
         "what",
+        "is",
+        "known",
+        "tell",
+        "me",
         "where",
         "which",
         "who",
@@ -223,6 +234,17 @@ def _search_terms(question: str) -> list[str]:
     }
     terms = [term for term in re.findall(r"[a-zA-Z][a-zA-Z0-9+-]{2,}", question.lower()) if term not in stop]
     return terms[:8] or [question.strip()]
+
+
+def _profile_subject(question: str) -> str | None:
+    cleaned = re.sub(
+        r"^\s*(?:who is|who's|tell me about|profile of|what is known about)\s+",
+        "",
+        question.strip(),
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\?\s*$", "", cleaned).strip()
+    return cleaned or None
 
 
 def _question_subject(question: str) -> str | None:
@@ -354,6 +376,63 @@ def _attendance_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
     return sources
 
 
+def _profile_sources(db: Session, subject: str) -> list[dict[str, Any]]:
+    politician = _resolve_profile_politician(db, subject)
+    if politician is None:
+        return []
+    memberships = list(
+        db.scalars(
+            select(CommitteeMembership)
+            .options(joinedload(CommitteeMembership.committee))
+            .where(CommitteeMembership.politician_id == politician.id)
+            .order_by(CommitteeMembership.role, CommitteeMembership.id)
+            .limit(5)
+        ).unique()
+    )
+    question_count = db.scalar(
+        select(func.count()).select_from(ParliamentaryQuestion).where(ParliamentaryQuestion.politician_id == politician.id)
+    ) or 0
+    attendance_count = db.scalar(
+        select(func.count()).select_from(CommitteeAttendance).where(CommitteeAttendance.politician_id == politician.id)
+    ) or 0
+    committee_names = [
+        " - ".join(part for part in [membership.committee.name, membership.role] if part)
+        for membership in memberships
+        if membership.committee
+    ]
+    party_name = politician.party.short_name or politician.party.name if politician.party else None
+    source = {
+        "title": politician.display_name,
+        "source_url": politician.profile_url,
+        "source_type": "politician_profile",
+        "record_id": str(politician.id),
+        "date": None,
+        "excerpt": _excerpt(
+            " | ".join(
+                part
+                for part in [
+                    politician.full_name,
+                    f"Party: {party_name}" if party_name else None,
+                    f"Committees: {', '.join(committee_names)}" if committee_names else None,
+                    f"Linked parliamentary questions: {question_count}",
+                    f"Linked attendance records: {attendance_count}",
+                    politician.source_status,
+                ]
+                if part
+            )
+        ),
+        "display_name": politician.display_name,
+        "full_name": politician.full_name,
+        "party": party_name,
+        "profile_url": politician.profile_url,
+        "committees": committee_names,
+        "question_count": question_count,
+        "attendance_count": attendance_count,
+        "source_status": politician.source_status,
+    }
+    return [source]
+
+
 def _bill_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
     statement = select(Bill).order_by(Bill.year.desc().nullslast(), Bill.updated_at.desc()).limit(MAX_SOURCES)
     filters = _filters([Bill.title, Bill.short_title, Bill.bill_number, Bill.status], terms)
@@ -424,6 +503,79 @@ def _politician_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
     ]
 
 
+def _resolve_profile_politician(db: Session, subject: str) -> Politician | None:
+    query_tokens = _name_tokens(subject)
+    if not query_tokens:
+        return None
+    candidates = list(
+        db.scalars(
+            select(Politician)
+            .outerjoin(PoliticianAlias)
+            .options(joinedload(Politician.party), joinedload(Politician.aliases))
+            .where(
+                or_(
+                    *[
+                        Politician.full_name.ilike(f"%{token}%")
+                        for token in query_tokens
+                    ],
+                    *[
+                        Politician.display_name.ilike(f"%{token}%")
+                        for token in query_tokens
+                    ],
+                    *[
+                        Politician.slug.ilike(f"%{token}%")
+                        for token in query_tokens
+                    ],
+                    *[
+                        PoliticianAlias.alias.ilike(f"%{token}%")
+                        for token in query_tokens
+                    ],
+                )
+            )
+            .limit(50)
+        ).unique()
+    )
+    scored = sorted(
+        ((candidate, _profile_match_score(candidate, query_tokens)) for candidate in candidates),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    if not scored or scored[0][1] < 50:
+        return None
+    return scored[0][0]
+
+
+def _profile_match_score(politician: Politician, query_tokens: list[str]) -> int:
+    names = [politician.full_name, politician.display_name, politician.slug.replace("-", " ")]
+    names.extend(alias.alias for alias in politician.aliases)
+    best = 0
+    for name in names:
+        name_tokens = _name_tokens(name)
+        if not name_tokens:
+            continue
+        score = 0
+        if name_tokens == query_tokens:
+            score = 100
+        elif all(token in name_tokens for token in query_tokens):
+            score = 90
+        elif query_tokens[-1] in name_tokens and query_tokens[0][0] == name_tokens[0][0]:
+            score = 80
+        elif query_tokens[-1] in name_tokens:
+            score = 65
+        elif any(token in name_tokens for token in query_tokens):
+            score = 35
+        best = max(best, score)
+    return best
+
+
+def _name_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+    without_party = re.sub(r"\([^)]+\)", " ", value)
+    without_titles = re.sub(r"\b(?:Mr|Ms|Mrs|Dr|Adv|Prof|Hon)\b", " ", without_party, flags=re.IGNORECASE)
+    return [token.lower() for token in re.findall(r"[A-Za-z][A-Za-z'-]*", without_titles) if len(token) > 1]
+
+
 def _question_to_source(item: ParliamentaryQuestion) -> dict[str, Any]:
     title = item.title or item.question_number or "Parliamentary question"
     asker = item.politician.display_name if item.politician else item.asked_by_name
@@ -460,6 +612,8 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
             "I could not find source-backed KnowYourMPZA records that answer this question yet. "
             f"{evidence.coverage_notice}"
         )
+    if evidence.intent == "profile":
+        return _build_profile_answer(evidence)
     if evidence.intent == "questions":
         return _build_question_answer(question, evidence)
     lines = [
@@ -471,6 +625,32 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
         lines.append(f"- {source['title']}{f': {detail}' if detail else ''}")
     lines.append(evidence.coverage_notice)
     lines.append("Open the attached sources to verify each record.")
+    return "\n".join(lines)
+
+
+def _build_profile_answer(evidence: RetrievedEvidence) -> str:
+    source = evidence.sources[0]
+    name = source.get("display_name") or source["title"]
+    full_name = source.get("full_name")
+    party = source.get("party") or "party not confirmed yet"
+    committees = source.get("committees") or []
+    question_count = source.get("question_count") or 0
+    attendance_count = source.get("attendance_count") or 0
+    lines = [f"{name} is a South African public representative in the KnowYourMPZA records."]
+    details = []
+    if full_name and full_name != name:
+        details.append(f"Full name: {full_name}.")
+    details.append(f"Party: {party}.")
+    if committees:
+        details.append(f"Linked committee work: {_join_human(committees[:4])}.")
+    else:
+        details.append("No committee memberships are linked in the imported records yet.")
+    details.append(
+        f"Imported activity currently linked: {question_count} parliamentary question"
+        f"{'' if question_count == 1 else 's'} and {attendance_count} attendance record"
+        f"{'' if attendance_count == 1 else 's'}."
+    )
+    lines.extend(["", *details, "", evidence.coverage_notice, "Use the source link below to verify the profile record."])
     return "\n".join(lines)
 
 
@@ -625,6 +805,7 @@ def _coverage_notice(intent: str, has_sources: bool) -> str:
         "attendance": "Attendance records cover explicit PMG attendance rows linked so far and should not be read as a complete attendance rate yet.",
         "bills": "Bills coverage is PMG-backed and may omit records not yet linked from source backfills.",
         "votes": "Vote data is source-backed where available, but individual vote records remain incomplete.",
+        "profile": "This profile answer uses only source-backed identity and activity records currently linked in production.",
         "politicians": "MP identity records are source-backed, while party and committee links continue to improve through scheduled backfills.",
     }.get(intent, "KnowYourMPZA answers only from imported, source-backed records.")
     if has_sources:
