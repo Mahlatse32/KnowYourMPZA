@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: knowyourmpza-api
+    runtime: docker
+    repo: https://github.com/Mahlatse32/KnowYourMPZA
+    branch: main
+    rootDir: backend
+    dockerfilePath: backend/Dockerfile
+    dockerContext: backend
+    plan: free
+    region: oregon
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ENVIRONMENT
+        value: production
+      - key: CORS_ORIGIN
+        value: https://knowyourmpza.vercel.app
+      - key: INGESTION_ENABLED
+        value: "false"
