@@ -1,4 +1,5 @@
 from app.db import Base
+from app.models.ai_answer import AiAnswer
 from app.models.bill import Bill
 from app.models.bill_event import BillEvent
 from app.models.committee import Committee
@@ -26,6 +27,7 @@ from app.models.vote_record import VoteRecord
 
 __all__ = [
     "Base",
+    "AiAnswer",
     "Bill",
     "BillEvent",
     "Committee",

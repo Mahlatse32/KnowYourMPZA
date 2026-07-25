@@ -23,4 +23,4 @@ npm run build
 
 ## Scope
 
-The frontend shows MPs, parties, committees, PMG evidence, parliamentary questions, source links, and quality data. It does not include authentication, payments, AI summaries, chat, bills, or voting records.
+The frontend shows MPs, parties, committees, PMG evidence, parliamentary questions, source links, quality data, and the source-backed Ask KnowYourMPZA experience. It does not include authentication or payments.

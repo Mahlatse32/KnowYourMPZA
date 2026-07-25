@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { ExternalLink, Search, ShieldCheck } from "lucide-react";
+import { ExternalLink, MessageSquareText, Search, ShieldCheck } from "lucide-react";
 import "./styles.css";
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
@@ -47,6 +47,19 @@ type AttendanceSummary = {
   by_committee: Array<{ committee_id?: string; committee_name?: string; present: number; absent: number; apology: number; unknown: number; total: number }>;
   recent: Array<{ meeting_id: string; meeting_title: string; meeting_date?: string; committee_name?: string; attendance_status: string; source_url?: string }>;
 };
+type AiSource = { title: string; source_url?: string; source_type: string; record_id: string; date?: string; excerpt?: string };
+type AiAnswer = {
+  id?: string;
+  question: string;
+  answer: string;
+  intent: string;
+  sources: AiSource[];
+  coverage_notice: string;
+  data_snapshot: Record<string, number>;
+  model_used: string;
+  cached: boolean;
+  generated_at: string;
+};
 
 function App() {
   const [path, setPath] = useState(location.pathname);
@@ -65,6 +78,7 @@ function App() {
       <Header navigate={navigate} />
       <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
         {route.length === 0 && <Home navigate={navigate} />}
+        {route[0] === "ask" && <AskPage />}
         {route[0] === "search" && <SearchPage navigate={navigate} />}
         {route[0] === "politicians" && (route[1] ? <PoliticianPage id={route[1]} /> : <ListPage title="MPs" endpoint="/politicians" render={(item: Politician) => <PoliticianCard item={item} navigate={navigate} />} />)}
         {route[0] === "parties" && <ListPage title="Parties" endpoint="/parties" render={(item: Party) => <BasicCard title={item.name} meta={item.short_name} />} />}
@@ -78,7 +92,7 @@ function App() {
 }
 
 function Header({ navigate }: { navigate: (to: string) => void }) {
-  const links = [["/search", "Search"], ["/politicians", "MPs"], ["/parties", "Parties"], ["/committees", "Committees"], ["/documents", "Documents"], ["/questions", "Questions"], ["/quality", "Quality"]];
+  const links = [["/ask", "Ask"], ["/search", "Search"], ["/politicians", "MPs"], ["/parties", "Parties"], ["/committees", "Committees"], ["/documents", "Documents"], ["/questions", "Questions"], ["/quality", "Quality"]];
   return (
     <header className="border-b border-line bg-white">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-4 sm:px-6 lg:px-8">
@@ -98,11 +112,88 @@ function Home({ navigate }: { navigate: (to: string) => void }) {
         <h1 className="max-w-3xl text-4xl font-semibold tracking-normal">Evidence-backed South African MP profiles</h1>
         <p className="mt-4 max-w-2xl text-lg text-slate-700">Browse MPs, parties, committees, PMG evidence, parliamentary questions, source links, and quality checks from the verified backend dataset.</p>
         <div className="mt-6 flex gap-3">
+          <button onClick={() => navigate("/ask")} className="inline-flex items-center gap-2 rounded bg-civic px-4 py-2 text-white"><MessageSquareText size={18} /> Ask</button>
           <button onClick={() => navigate("/search")} className="inline-flex items-center gap-2 rounded bg-civic px-4 py-2 text-white"><Search size={18} /> Search MPs</button>
           <button onClick={() => navigate("/quality")} className="inline-flex items-center gap-2 rounded border border-line px-4 py-2"><ShieldCheck size={18} /> Quality</button>
         </div>
       </div>
       <QualitySummary compact />
+    </section>
+  );
+}
+
+function AskPage() {
+  const examples = [
+    "Which MPs asked questions about Eskom?",
+    "Who sits on the police committee?",
+    "Show questions mentioning illegal immigration.",
+    "Which bills mention policing?",
+  ];
+  const [question, setQuestion] = useState(examples[0]);
+  const [answer, setAnswer] = useState<AiAnswer | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const ask = (refresh = false) => {
+    if (!question.trim()) return;
+    setLoading(true);
+    setError(null);
+    fetch(`${API_BASE}/ai/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, refresh }),
+    })
+      .then((response) => response.ok ? response.json() : Promise.reject(new Error(response.statusText)))
+      .then(setAnswer)
+      .catch((err: Error) => {
+        setAnswer(null);
+        setError(err.message || "Ask failed");
+      })
+      .finally(() => setLoading(false));
+  };
+
+  return (
+    <section className="grid gap-6 lg:grid-cols-[.9fr_1.1fr]">
+      <div>
+        <h1 className="section-title">Ask KnowYourMPZA</h1>
+        <p className="mb-4 text-sm text-slate-700">Ask in normal language. Answers are generated only from source-backed records currently imported into KnowYourMPZA.</p>
+        <textarea value={question} onChange={(event) => setQuestion(event.target.value)} className="min-h-32 w-full rounded border border-line bg-white px-4 py-3" />
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button onClick={() => ask(false)} disabled={loading} className="inline-flex items-center gap-2 rounded bg-civic px-4 py-2 text-white disabled:opacity-60"><MessageSquareText size={18} /> Ask</button>
+          {answer && <button onClick={() => ask(true)} disabled={loading} className="rounded border border-line px-4 py-2 disabled:opacity-60">Refresh answer</button>}
+        </div>
+        <div className="mt-5 grid gap-2">
+          {examples.map((item) => <button key={item} onClick={() => setQuestion(item)} className="rounded border border-line bg-white px-3 py-2 text-left text-sm hover:border-civic">{item}</button>)}
+        </div>
+      </div>
+      <div className="space-y-4">
+        {loading && <LoadingText />}
+        {error && <EmptyState title="AI answer unavailable" body="The backend could not generate a source-backed answer. Existing search and browse pages remain available." />}
+        {answer && (
+          <>
+            <article className="rounded border border-line bg-white p-4">
+              <div className="mb-2 flex flex-wrap gap-2 text-xs text-slate-600">
+                <span className="rounded border border-line px-2 py-1">{answer.intent}</span>
+                <span className="rounded border border-line px-2 py-1">{answer.cached ? "saved answer" : "fresh answer"}</span>
+                <span className="rounded border border-line px-2 py-1">{answer.model_used}</span>
+              </div>
+              <p className="whitespace-pre-line text-sm leading-6">{answer.answer}</p>
+            </article>
+            <p className="rounded border border-line bg-white p-3 text-sm text-slate-700">{answer.coverage_notice}</p>
+            <Panel title="Sources">
+              {answer.sources.length > 0 ? answer.sources.map((source) => (
+                <article key={`${source.source_type}-${source.record_id}`} className="rounded border border-line bg-white p-4">
+                  <h3 className="font-semibold">{source.title}</h3>
+                  <p className="mt-1 text-sm text-slate-700">{[source.source_type, source.date].filter(Boolean).join(" | ")}</p>
+                  {source.excerpt && <p className="mt-2 text-sm">{source.excerpt}</p>}
+                  <EvidenceLink href={source.source_url} />
+                </article>
+              )) : <EmptyState title="No source-backed match yet" body="The AI layer did not find imported records for this question, so it refused to invent an answer." />}
+            </Panel>
+          </>
+        )}
+        {!answer && !loading && !error && <EmptyState title="No question answered yet" body="Ask a civic question to search across MPs, committees, questions, bills, attendance, and votes." />}
+      </div>
     </section>
   );
 }

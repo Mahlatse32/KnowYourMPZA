@@ -1,7 +1,7 @@
 # KnowYourMPZA Backend
 
 FastAPI backend for verified South African MP data. It ingests People's Assembly profiles and PMG documents, archives fetched HTML, resolves MP aliases, and exposes quality/API endpoints.
-It also ingests parliamentary questions as source-backed backend data, including direct PDF URLs and archive pages that link to PDFs, without adding AI, chatbot, auth, or search infrastructure.
+It also ingests parliamentary questions as source-backed backend data, including direct PDF URLs and archive pages that link to PDFs, and exposes a source-backed AI ask endpoint.
 V1 pairs this backend with a small public frontend in `../frontend`.
 
 ## Run
@@ -98,6 +98,9 @@ curl http://localhost:8000/ingestion/runs/{run_id}
 ## Browse APIs
 
 ```bash
+curl -X POST http://localhost:8000/ai/ask \
+  -H "Content-Type: application/json" \
+  -d '{"question":"Which MPs asked questions about Eskom?"}'
 curl "http://localhost:8000/parties?limit=50&offset=0"
 curl http://localhost:8000/parties/{party_id}/politicians
 curl "http://localhost:8000/committees?limit=50&offset=0"
@@ -178,7 +181,11 @@ Set:
 DATABASE_URL=postgresql+psycopg://...
 ENVIRONMENT=production
 CORS_ORIGIN=https://your-frontend.example
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-5-mini
 ```
+
+`OPENAI_API_KEY` is optional for deployment. Without it, `/ai/ask` returns a deterministic source-backed summary from retrieved records; with it, the configured model writes a more natural answer from the same evidence.
 
 Health endpoints:
 
@@ -203,4 +210,4 @@ tar -czf backups/raw-archives.tgz data/raw
 pytest
 ```
 
-No chatbot, AI, OpenSearch, pgvector, auth, payments, bills, or voting records are included in V1.
+No OpenSearch, pgvector, auth, or payments are included in V1.

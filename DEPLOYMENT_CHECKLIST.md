@@ -46,6 +46,8 @@ Backend service:
 | `DATABASE_URL` | yes | Production PostgreSQL connection string using `postgresql+psycopg://...`. |
 | `ENVIRONMENT` | yes | Set to `production`. |
 | `CORS_ORIGIN` | yes | Comma-separated frontend origins. |
+| `OPENAI_API_KEY` | no | Enables model-written `/ai/ask` answers. If omitted, the endpoint returns deterministic source-backed summaries. |
+| `OPENAI_MODEL` | no | Defaults to `gpt-5-mini`. Override only after answer-quality and cost testing. |
 | `INGESTION_ENABLED` | no for web service | Keep `false` on the web service unless intentionally ingesting from the service process. |
 | `PEOPLE_ASSEMBLY_BASE_URL` | no | Default is `https://www.pa.org.za`. |
 | `PEOPLE_ASSEMBLY_MEMBER_LIST_URLS` | no | Optional PA member list override. |
@@ -79,6 +81,7 @@ Frontend service:
 - [ ] `GET /politicians?limit=10` returns records.
 - [ ] `GET /parties?limit=10` includes non-Unknown party records.
 - [ ] `GET /questions?limit=10` returns source-backed records.
+- [ ] `POST /ai/ask` returns an answer with source links and a coverage notice.
 - [ ] Frontend search returns at least one known MP.
 - [ ] An MP profile opens and displays source links.
 - [ ] Attendance panel either shows records or the honest in-progress empty state.
