@@ -23,7 +23,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 2
+AI_ANSWER_FORMAT_VERSION = 4
 
 
 @dataclass
@@ -31,6 +31,9 @@ class RetrievedEvidence:
     intent: str
     sources: list[dict[str, Any]]
     coverage_notice: str
+    subject: str | None = None
+    topic: str | None = None
+    answer_kind: str = "general"
 
 
 def normalize_question(question: str) -> str:
@@ -69,9 +72,12 @@ def answer_question(db: Session, question: str, refresh: bool = False) -> tuple[
 
 def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
     terms = _search_terms(question)
+    subject = _question_subject(question)
+    asker_terms = _question_asker_terms(question)
+    topic_terms = _question_topic_terms(question, terms, asker_terms)
     intent = _classify_intent(question)
     if intent == "questions":
-        sources = _question_sources(db, terms)
+        sources = _question_sources(db, topic_terms or terms, asker_terms=asker_terms)
     elif intent == "committees":
         sources = _committee_sources(db, terms)
     elif intent == "bills":
@@ -90,6 +96,9 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
         intent=intent,
         sources=sources,
         coverage_notice=_coverage_notice(intent, bool(sources)),
+        subject=subject,
+        topic=_topic_from_terms(topic_terms),
+        answer_kind="questions_by_person_topic" if asker_terms and topic_terms and intent == "questions" else "general",
     )
 
 
@@ -160,7 +169,7 @@ def _data_snapshot(db: Session) -> dict[str, int]:
 
 def _classify_intent(question: str) -> str:
     text = question.lower()
-    if any(word in text for word in ["question", "asked", "minister", "department"]):
+    if any(word in text for word in ["question", "asked", " ask ", "minister", "department"]):
         return "questions"
     if any(word in text for word in ["attendance", "attend", "absent", "apology", "present"]):
         return "attendance"
@@ -189,6 +198,8 @@ def _search_terms(question: str) -> list[str]:
         "question",
         "questions",
         "asked",
+        "ask",
+        "about",
         "show",
         "the",
         "their",
@@ -197,34 +208,100 @@ def _search_terms(question: str) -> list[str]:
         "which",
         "who",
         "with",
+        "mr",
+        "mrs",
+        "ms",
+        "dr",
+        "adv",
+        "prof",
+        "hon",
+        "anc",
+        "da",
+        "eff",
+        "mk",
+        "ifp",
     }
     terms = [term for term in re.findall(r"[a-zA-Z][a-zA-Z0-9+-]{2,}", question.lower()) if term not in stop]
     return terms[:8] or [question.strip()]
+
+
+def _question_subject(question: str) -> str | None:
+    pattern = (
+        r"\b(?:Mr|Ms|Mrs|Dr|Adv|Prof|Hon)\s+"
+        r"[A-Z][A-Za-z .'-]{0,90}?"
+        r"(?:\s+\([A-Za-z0-9 +.-]+\))?"
+        r"(?=\s+(?:ask|asked|asks|question|questions|about)\b|\?|$)"
+    )
+    match = re.search(pattern, question)
+    if not match:
+        return None
+    return re.sub(r"\s+", " ", match.group(0)).strip()
+
+
+def _question_asker_terms(question: str) -> list[str]:
+    subject = _question_subject(question)
+    if not subject:
+        return []
+    without_party = re.sub(r"\([^)]+\)", "", subject)
+    without_title = re.sub(r"^(?:Mr|Ms|Mrs|Dr|Adv|Prof|Hon)\s+", "", without_party, flags=re.IGNORECASE)
+    terms = [term for term in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", without_title)]
+    if not terms:
+        return []
+    surname = terms[-1]
+    full_name = " ".join(terms)
+    if full_name.lower() == surname.lower():
+        return [surname]
+    return [full_name, surname]
+
+
+def _question_topic_terms(question: str, terms: list[str], asker_terms: list[str]) -> list[str]:
+    about_match = re.search(r"\babout\s+(.+?)(?:\?|$)", question, flags=re.IGNORECASE)
+    if about_match:
+        about_text = about_match.group(1)
+        about_text = re.sub(r"\([^)]+\)", " ", about_text)
+        about_terms = _search_terms(about_text)
+        if about_terms:
+            return about_terms
+    asker_tokens = {token.lower() for term in asker_terms for token in term.split()}
+    return [term for term in terms if term.lower() not in asker_tokens]
+
+
+def _topic_from_terms(terms: list[str]) -> str | None:
+    if not terms:
+        return None
+    return " ".join(terms).title()
 
 
 def _filters(columns: list[Any], terms: list[str]) -> list[Any]:
     return [column.ilike(f"%{term}%") for term in terms for column in columns]
 
 
-def _question_sources(db: Session, terms: list[str], limit: int = MAX_SOURCES) -> list[dict[str, Any]]:
+def _question_sources(
+    db: Session,
+    terms: list[str],
+    limit: int = MAX_SOURCES,
+    asker_terms: list[str] | None = None,
+) -> list[dict[str, Any]]:
     statement = (
         select(ParliamentaryQuestion)
         .options(joinedload(ParliamentaryQuestion.politician).joinedload(Politician.party))
         .order_by(ParliamentaryQuestion.asked_date.desc().nullslast(), ParliamentaryQuestion.created_at.desc())
         .limit(limit)
     )
-    filters = _filters(
+    topic_filters = _filters(
         [
             ParliamentaryQuestion.title,
             ParliamentaryQuestion.question_text,
             ParliamentaryQuestion.answer_text,
             ParliamentaryQuestion.department,
-            ParliamentaryQuestion.asked_by_name,
         ],
         terms,
     )
-    if filters:
-        statement = statement.where(or_(*filters))
+    if topic_filters:
+        statement = statement.where(or_(*topic_filters))
+    asker_filters = _filters([ParliamentaryQuestion.asked_by_name, ParliamentaryQuestion.question_text], asker_terms or [])
+    if asker_filters:
+        statement = statement.where(or_(*asker_filters))
     return [_question_to_source(item) for item in db.scalars(statement).unique()]
 
 
@@ -399,6 +476,30 @@ def _build_question_answer(question: str, evidence: RetrievedEvidence) -> str:
     source_count = len(evidence.sources)
     asker_names = _unique_values(source.get("asked_by") for source in evidence.sources)
     topic = _topic_from_question(question)
+    if evidence.answer_kind == "questions_by_person_topic":
+        subject = evidence.subject or (asker_names[0] if asker_names else "that MP")
+        topic_label = evidence.topic or topic
+        intro = (
+            f"I found {source_count} imported parliamentary question record"
+            f"{'' if source_count == 1 else 's'} where {subject} asked about {topic_label}."
+        )
+        lines = [intro, "", "What the questions covered:"]
+        for source in evidence.sources[:5]:
+            title = _clean_question_title(source["title"])
+            detail_parts = [source.get("department"), source.get("status"), source.get("date")]
+            detail = ", ".join(str(part) for part in detail_parts if part)
+            excerpt = _clean_answer_excerpt(source.get("excerpt"))
+            line = f"- {title}"
+            if detail:
+                line = f"{line} ({detail})"
+            if excerpt:
+                line = f"{line}: {excerpt}"
+            lines.append(line)
+        if source_count > 5:
+            lines.append(f"- Plus {source_count - 5} more matching imported records.")
+        lines.extend(["", evidence.coverage_notice, "Use the source links below to verify each record."])
+        return "\n".join(lines)
+
     if asker_names:
         named = _join_human(asker_names[:5])
         intro = (
@@ -455,6 +556,22 @@ def _clean_question_title(title: str) -> str:
     cleaned = cleaned.replace("Written question reply", "Written question")
     cleaned = cleaned.replace("â", "-").replace("—", "-")
     return cleaned
+
+
+def _clean_answer_excerpt(excerpt: str | None) -> str | None:
+    if not excerpt:
+        return None
+    cleaned = re.sub(r"^Asked by [^|]+\|\s*", "", excerpt).strip()
+    cleaned = re.sub(
+        r"^NATIONAL ASSEMBLY(?:\s+\(NA\))?\s+(?:QUESTION|WRITTEN REPLY QUESTION).*?\b\d+\.\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    cleaned = cleaned.replace("â", "-").replace("—", "-")
+    if len(cleaned) <= 220:
+        return cleaned
+    return f"{cleaned[:220].rstrip()}..."
 
 
 def _unique_values(values: Any) -> list[str]:
