@@ -12,7 +12,7 @@ from app.models.committee_membership import CommitteeMembership
 from app.models.ai_answer import AiAnswer
 from app.models.party import Party
 from app.models.politician import Politician
-from app.services.ai_service import _clean_parliament_question_text
+from app.services.ai_service import _clean_display_text, _clean_parliament_question_text
 
 importlib.import_module("app.models")
 
@@ -114,7 +114,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 7
+    assert body["data_snapshot"]["ai_answer_format_version"] == 8
 
 
 def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
@@ -132,7 +132,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 7
+    assert body["data_snapshot"]["ai_answer_format_version"] == 8
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -149,6 +149,11 @@ def test_ai_question_evidence_text_is_cleaned_before_answering():
     assert cleaned.startswith("asked the Minister of Water and Sanitation")
     assert "NATIONAL ASSEMBLY QUESTION" not in cleaned
     assert "to ask the Ministe..." not in cleaned
+
+
+def test_ai_display_text_cleans_common_mojibake():
+    assert _clean_display_text("Ethics and Membersâ Interest") == "Ethics and Members' Interest"
+    assert _clean_display_text("Question Ã¢ÂÂ reply") == "Question - reply"
 
 
 def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monkeypatch):
@@ -201,7 +206,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 7
+    assert body["data_snapshot"]["ai_answer_format_version"] == 8
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
