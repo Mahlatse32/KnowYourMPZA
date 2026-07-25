@@ -23,7 +23,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 4
+AI_ANSWER_FORMAT_VERSION = 5
 
 
 @dataclass
@@ -429,13 +429,15 @@ def _question_to_source(item: ParliamentaryQuestion) -> dict[str, Any]:
     asker = item.politician.display_name if item.politician else item.asked_by_name
     if not asker:
         asker = _infer_question_asker(" ".join(part for part in [item.question_text, item.answer_text] if part))
+    question_text = _clean_parliament_question_text(item.question_text, asker)
+    answer_text = _clean_parliament_question_text(item.answer_text, None)
     excerpt = " | ".join(
         part
         for part in [
             f"Asked by {asker}" if asker else None,
             item.department,
-            item.question_text,
-            item.answer_text,
+            question_text,
+            answer_text,
         ]
         if part
     )
@@ -572,6 +574,26 @@ def _clean_answer_excerpt(excerpt: str | None) -> str | None:
     if len(cleaned) <= 220:
         return cleaned
     return f"{cleaned[:220].rstrip()}..."
+
+
+def _clean_parliament_question_text(text: str | None, asker: str | None) -> str | None:
+    if not text:
+        return None
+    cleaned = re.sub(r"\s+", " ", text).strip()
+    cleaned = cleaned.replace("â", "-").replace("—", "-")
+    cleaned = re.sub(
+        r"^NATIONAL ASSEMBLY(?:\s+\(NA\))?\s+(?:QUESTION|WRITTEN REPLY QUESTION).*?\b\d+\.\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    if asker:
+        cleaned = re.sub(rf"^{re.escape(asker)}\s+to ask\s+the\s+", "asked the ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(rf"^{re.escape(asker)}\s+to ask\s+", "asked ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"^(Question|Answer):\s*", "", cleaned, flags=re.IGNORECASE).strip()
+    if len(cleaned) <= MAX_EXCERPT_CHARS:
+        return cleaned
+    return f"{cleaned[:MAX_EXCERPT_CHARS].rstrip()}..."
 
 
 def _unique_values(values: Any) -> list[str]:
