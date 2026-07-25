@@ -25,7 +25,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 6
+AI_ANSWER_FORMAT_VERSION = 7
 
 
 @dataclass
@@ -81,7 +81,11 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
     if intent == "questions":
         sources = _question_sources(db, topic_terms or terms, asker_terms=asker_terms)
     elif intent == "committees":
-        sources = _committee_sources(db, terms)
+        committee_terms = _committee_topic_terms(question, terms)
+        if _is_committee_membership_question(question):
+            sources = _committee_membership_sources(db, committee_terms)
+        else:
+            sources = _committee_sources(db, committee_terms or terms)
     elif intent == "bills":
         sources = _bill_sources(db, terms)
     elif intent == "votes":
@@ -180,7 +184,7 @@ def _classify_intent(question: str) -> str:
         return "questions"
     if any(word in text for word in ["attendance", "attend", "absent", "apology", "present"]):
         return "attendance"
-    if any(word in text for word in ["committee", "committees", "sits on", "serve on"]):
+    if any(word in text for word in ["committee", "committees", "sits on", "sit on", "serve on", "serves on"]):
         return "committees"
     if any(word in text for word in ["bill", "act", "legislation"]):
         return "bills"
@@ -219,6 +223,14 @@ def _search_terms(question: str) -> list[str]:
         "which",
         "who",
         "with",
+        "sits",
+        "sit",
+        "serve",
+        "serves",
+        "served",
+        "committee",
+        "committees",
+        "on",
         "mr",
         "mrs",
         "ms",
@@ -294,6 +306,23 @@ def _topic_from_terms(terms: list[str]) -> str | None:
     return " ".join(terms).title()
 
 
+def _is_committee_membership_question(question: str) -> bool:
+    text = question.lower()
+    return "who" in text and any(phrase in text for phrase in ["sits on", "sit on", "serve on", "serves on", "members of"])
+
+
+def _committee_topic_terms(question: str, terms: list[str]) -> list[str]:
+    cleaned = re.sub(
+        r"\b(who|which|mps?|members?|sits?|serves?|served|serve|on|the|committee|committees|of)\b",
+        " ",
+        question,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    topic_terms = _search_terms(cleaned)
+    return topic_terms or terms
+
+
 def _filters(columns: list[Any], terms: list[str]) -> list[Any]:
     return [column.ilike(f"%{term}%") for term in terms for column in columns]
 
@@ -343,6 +372,85 @@ def _committee_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
         }
         for item in db.scalars(statement)
     ]
+
+
+def _committee_membership_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
+    committee = _resolve_committee(db, terms)
+    if committee is None:
+        return []
+    memberships = list(
+        db.scalars(
+            select(CommitteeMembership)
+            .options(joinedload(CommitteeMembership.politician).joinedload(Politician.party), joinedload(CommitteeMembership.committee))
+            .where(CommitteeMembership.committee_id == committee.id)
+            .order_by(CommitteeMembership.role, CommitteeMembership.id)
+            .limit(MAX_SOURCES)
+        ).unique()
+    )
+    if not memberships:
+        return [
+            {
+                "title": committee.name,
+                "source_url": committee.source_url,
+                "source_type": "committee_membership_summary",
+                "record_id": str(committee.id),
+                "date": None,
+                "excerpt": "No linked members are currently imported for this committee.",
+                "committee_name": committee.name,
+                "members": [],
+            }
+        ]
+    members = []
+    for membership in memberships:
+        party = membership.politician.party.short_name if membership.politician and membership.politician.party else None
+        members.append(
+            {
+                "name": membership.politician.display_name if membership.politician else "MP not linked",
+                "party": None if _is_unknown_label(party) else party,
+                "role": membership.role,
+                "source_url": membership.source_url,
+            }
+        )
+    return [
+        {
+            "title": committee.name,
+            "source_url": committee.source_url or memberships[0].source_url,
+            "source_type": "committee_membership_summary",
+            "record_id": str(committee.id),
+            "date": None,
+            "excerpt": _excerpt(", ".join(_member_label(member) for member in members)),
+            "committee_name": committee.name,
+            "members": members,
+        }
+    ]
+
+
+def _resolve_committee(db: Session, terms: list[str]) -> Committee | None:
+    if not terms:
+        return None
+    candidates = list(
+        db.scalars(
+            select(Committee)
+            .where(or_(*_filters([Committee.name, Committee.description], terms)))
+            .limit(50)
+        )
+    )
+    scored = sorted(((committee, _committee_match_score(committee, terms)) for committee in candidates), key=lambda item: item[1], reverse=True)
+    if not scored or scored[0][1] < 50:
+        return None
+    return scored[0][0]
+
+
+def _committee_match_score(committee: Committee, terms: list[str]) -> int:
+    name_tokens = set(_name_tokens(committee.name))
+    term_tokens = {term.lower() for term in terms}
+    if not name_tokens or not term_tokens:
+        return 0
+    if term_tokens.issubset(name_tokens):
+        return 100
+    if term_tokens & name_tokens:
+        return 70
+    return 0
 
 
 def _attendance_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
@@ -401,6 +509,8 @@ def _profile_sources(db: Session, subject: str) -> list[dict[str, Any]]:
         if membership.committee
     ]
     party_name = politician.party.short_name or politician.party.name if politician.party else None
+    if _is_unknown_label(party_name):
+        party_name = None
     source = {
         "title": politician.display_name,
         "source_url": politician.profile_url,
@@ -413,7 +523,7 @@ def _profile_sources(db: Session, subject: str) -> list[dict[str, Any]]:
                 for part in [
                     politician.full_name,
                     f"Party: {party_name}" if party_name else None,
-                    f"Committees: {', '.join(committee_names)}" if committee_names else None,
+                    f"Committees: {', '.join(_clean_display_text(name) for name in committee_names)}" if committee_names else None,
                     f"Linked parliamentary questions: {question_count}",
                     f"Linked attendance records: {attendance_count}",
                     politician.source_status,
@@ -614,6 +724,8 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
         )
     if evidence.intent == "profile":
         return _build_profile_answer(evidence)
+    if evidence.intent == "committees" and evidence.sources[0].get("source_type") == "committee_membership_summary":
+        return _build_committee_membership_answer(evidence)
     if evidence.intent == "questions":
         return _build_question_answer(question, evidence)
     lines = [
@@ -628,12 +740,32 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
     return "\n".join(lines)
 
 
+def _build_committee_membership_answer(evidence: RetrievedEvidence) -> str:
+    source = evidence.sources[0]
+    committee_name = _clean_display_text(source.get("committee_name") or source["title"])
+    members = source.get("members") or []
+    if not members:
+        return "\n".join(
+            [
+                f"I found the {committee_name} committee, but no linked member records are imported for it yet.",
+                "",
+                evidence.coverage_notice,
+                "Use the source link below to verify the committee record.",
+            ]
+        )
+    lines = [f"I found {len(members)} linked member record{'' if len(members) == 1 else 's'} for the {committee_name} committee.", "", "Linked members:"]
+    for member in members[:MAX_SOURCES]:
+        lines.append(f"- {_member_label(member)}")
+    lines.extend(["", evidence.coverage_notice, "Use the source links below to verify the membership records."])
+    return "\n".join(lines)
+
+
 def _build_profile_answer(evidence: RetrievedEvidence) -> str:
     source = evidence.sources[0]
-    name = source.get("display_name") or source["title"]
-    full_name = source.get("full_name")
+    name = _clean_display_text(source.get("display_name") or source["title"])
+    full_name = _clean_display_text(source.get("full_name"))
     party = source.get("party") or "party not confirmed yet"
-    committees = source.get("committees") or []
+    committees = [_clean_display_text(name) for name in source.get("committees") or []]
     question_count = source.get("question_count") or 0
     attendance_count = source.get("attendance_count") or 0
     lines = [f"{name} is a South African public representative in the KnowYourMPZA records."]
@@ -738,6 +870,31 @@ def _clean_question_title(title: str) -> str:
     cleaned = cleaned.replace("Written question reply", "Written question")
     cleaned = cleaned.replace("â", "-").replace("—", "-")
     return cleaned
+
+
+def _clean_display_text(value: str | None) -> str:
+    if not value:
+        return ""
+    return (
+        re.sub(r"\s+", " ", value)
+        .strip()
+        .replace("â", "'")
+        .replace("â", "-")
+        .replace("—", "-")
+    )
+
+
+def _is_unknown_label(value: str | None) -> bool:
+    return not value or value.strip().lower() in {"unknown", "unk", "n/a", "none"}
+
+
+def _member_label(member: dict[str, Any]) -> str:
+    label = _clean_display_text(member.get("name")) or "MP not linked"
+    details = [member.get("party"), member.get("role")]
+    clean_details = [_clean_display_text(str(detail)) for detail in details if detail]
+    if clean_details:
+        return f"{label} ({', '.join(clean_details)})"
+    return label
 
 
 def _clean_answer_excerpt(excerpt: str | None) -> str | None:
