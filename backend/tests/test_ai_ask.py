@@ -59,6 +59,37 @@ def _ingest_eskom_question(monkeypatch, db_session):
     return url
 
 
+def _ingest_multiple_eskom_questions(monkeypatch, db_session):
+    client.post("/ingest/seed")
+    pages = {
+        "https://www.parliament.gov.za/question/test-ai-dlamini-eskom": """
+        <html><body>
+          <h1>Written question reply NW1025 - Eskom maintenance</h1>
+          <p>Question Number: NW1025</p>
+          <p>Asked By: Ms M Dlamini (EFF)</p>
+          <p>Department: Water and Sanitation</p>
+          <p>Status: Answered</p>
+          <p>Question: Whether Eskom substations require urgent maintenance?</p>
+          <p>Answer: The department supplied an Eskom maintenance schedule.</p>
+        </body></html>
+        """,
+        "https://www.parliament.gov.za/question/test-ai-tito-eskom": """
+        <html><body>
+          <h1>Written question reply NW1661 - Eskom school connection</h1>
+          <p>Question Number: NW1661</p>
+          <p>Asked By: Mrs L F Tito (EFF)</p>
+          <p>Department: Basic Education</p>
+          <p>Status: Answered</p>
+          <p>Question: Whether Eskom has connected schools to electricity?</p>
+          <p>Answer: The department reported on school electricity connections.</p>
+        </body></html>
+        """,
+    }
+    monkeypatch.setattr("app.ingestion.parliament_questions.fetch_page", lambda url: pages[url])
+    response = client.post("/ingest/parliamentary-questions", json={"urls": list(pages)})
+    assert response.status_code == 200
+
+
 def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_session):
     monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
     source_url = _ingest_eskom_question(monkeypatch, db_session)
@@ -78,7 +109,25 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 2
+    assert body["data_snapshot"]["ai_answer_format_version"] == 4
+
+
+def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
+    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    _ingest_multiple_eskom_questions(monkeypatch, db_session)
+
+    response = client.post("/ai/ask", json={"question": "what did Ms M Dlamini (EFF) ask about eskom?"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "questions"
+    assert "where Ms M Dlamini (EFF) asked about Eskom" in body["answer"]
+    assert "Ms M Dlamini (EFF)" in body["answer"]
+    assert "Mrs L F Tito" not in body["answer"]
+    assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
+    assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
+    assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
+    assert body["data_snapshot"]["ai_answer_format_version"] == 4
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
