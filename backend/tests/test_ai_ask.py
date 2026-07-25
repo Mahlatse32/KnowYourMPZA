@@ -8,6 +8,8 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.models.ai_answer import AiAnswer
+from app.models.party import Party
+from app.models.politician import Politician
 from app.services.ai_service import _clean_parliament_question_text
 
 importlib.import_module("app.models")
@@ -110,7 +112,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 5
+    assert body["data_snapshot"]["ai_answer_format_version"] == 6
 
 
 def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
@@ -128,7 +130,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 5
+    assert body["data_snapshot"]["ai_answer_format_version"] == 6
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -145,6 +147,59 @@ def test_ai_question_evidence_text_is_cleaned_before_answering():
     assert cleaned.startswith("asked the Minister of Water and Sanitation")
     assert "NATIONAL ASSEMBLY QUESTION" not in cleaned
     assert "to ask the Ministe..." not in cleaned
+
+
+def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monkeypatch):
+    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    eff = Party(name="Economic Freedom Fighters", short_name="EFF")
+    unknown = Party(name="Unknown", short_name="UNKNOWN")
+    db_session.add_all([eff, unknown])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Politician(
+                full_name="Julius Sello Malema",
+                display_name="J Malema",
+                slug="j-malema",
+                party_id=eff.id,
+                profile_url="https://www.pa.org.za/person/julius-sello-malema/",
+                source_status="PA_VERIFIED",
+            ),
+            Politician(
+                full_name="C N Malematja",
+                display_name="C Malematja",
+                slug="c-malematja",
+                party_id=unknown.id,
+                profile_url="https://example.test/c-malematja",
+                source_status="PMG_DERIVED",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.post("/ai/ask", json={"question": "who is julius malema"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "profile"
+    assert "J Malema is a South African public representative" in body["answer"]
+    assert "Party: EFF" in body["answer"]
+    assert "C Malematja" not in body["answer"]
+    assert "Written question" not in body["answer"]
+    assert body["sources"] == [
+        {
+            "title": "J Malema",
+            "source_url": "https://www.pa.org.za/person/julius-sello-malema/",
+            "source_type": "politician_profile",
+            "record_id": body["sources"][0]["record_id"],
+            "date": None,
+            "excerpt": "Julius Sello Malema | Party: EFF | Linked parliamentary questions: 0 | Linked attendance records: 0 | PA_VERIFIED",
+            "asked_by": None,
+            "department": None,
+            "status": None,
+        }
+    ]
+    assert body["data_snapshot"]["ai_answer_format_version"] == 6
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
