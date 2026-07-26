@@ -1264,21 +1264,28 @@ def _build_person_meeting_answer(question: str, evidence: RetrievedEvidence) -> 
         lines = [
             f"I could not find a source-backed record of {person} asking a question in the imported PMG hearing records.",
         ]
+        status_parts = []
+        if present:
+            status_parts.append(f"present in {len(present)} meeting record{'' if len(present) == 1 else 's'}")
         if apologies:
-            first = apologies[0]
-            date = f" on {first['date']}" if first.get("date") else ""
+            status_parts.append(f"apology in {len(apologies)} meeting record{'' if len(apologies) == 1 else 's'}")
+        if status_parts:
             lines.append(
-                f"In the PMG record for {_clean_display_text(first['title'])}{date}, {person} is mentioned as having sent apologies, not as having spoken."
+                f"Across the matching PMG records, {person} is recorded as {_join_human(status_parts)}, but none of the imported text shows a question or intervention by them."
             )
-        elif present or mentions:
+        elif mentions:
             lines.append(
                 f"{person} is mentioned in the matching PMG records, but the imported text does not show a question or intervention by them."
             )
         else:
             lines.append(f"The matching PMG records do not mention {person} in the imported text.")
-        lines.extend(["", "What the matching PMG records cover:"])
+        lines.extend(["", f"Relevant PMG evidence about {person}:"])
         for source in evidence.sources[:5]:
-            lines.append(_meeting_topic_line(source))
+            lines.append(_person_meeting_line(source))
+        topic_lines = [_meeting_topic_line(source) for source in evidence.sources[:3] if source.get("meeting_summary")]
+        if topic_lines:
+            lines.extend(["", "Meeting topic context:"])
+            lines.extend(topic_lines)
     else:
         lines = [f"I found {len(evidence.sources)} matching PMG meeting record{'' if len(evidence.sources) == 1 else 's'} for {person}.", ""]
         lines.append("Relevant source-backed records:")

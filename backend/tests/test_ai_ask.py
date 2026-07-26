@@ -199,7 +199,9 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
     assert body["intent"] == "hearings"
     assert body["model_used"] == "deterministic-source-summary"
     assert body["answer"].startswith("I could not find a source-backed record of Julius Malema asking a question")
-    assert "mentioned as having sent apologies, not as having spoken" in body["answer"]
+    assert "recorded as apology in 1 meeting record" in body["answer"]
+    assert "none of the imported text shows a question or intervention" in body["answer"]
+    assert "Relevant PMG evidence about Julius Malema" in body["answer"]
     assert "Political Killings Task Team" in body["answer"]
     assert "parliamentary question" not in body["answer"].lower()
     assert body["sources"][0]["source_type"] == "person_meeting_evidence"
