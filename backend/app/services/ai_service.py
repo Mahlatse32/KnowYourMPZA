@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 12
+AI_ANSWER_FORMAT_VERSION = 13
 logger = logging.getLogger(__name__)
 
 
@@ -213,7 +213,9 @@ def _required_ai_answer_terms(evidence: RetrievedEvidence, fallback_answer: str)
         source = evidence.sources[0]
         name = source.get("full_name") or source.get("display_name") or source.get("title") or fallback_answer.split(" ", 1)[0]
         tokens = _name_tokens(name)
-        return [tokens[-1] if tokens else str(name)]
+        terms = [tokens[-1] if tokens else str(name)]
+        terms.extend(source.get("committees") or [])
+        return terms
 
     return []
 
@@ -1013,12 +1015,17 @@ def _clean_display_text(value: str | None) -> str:
         "\u202f": " ",
         "â": "-",
         "\u2011": "-",
+        "â": "-",
+        "–": "-",
         "â": "-",
         "Ã¢ÂÂ": "-",
         "â€”": "-",
         "—": "-",
+        "ã": "[",
+        "ã": "]",
         "ãsourceã": "",
         "【source】": "",
+        "[source]": "",
     }
     for bad, good in replacements.items():
         cleaned = cleaned.replace(bad, good)

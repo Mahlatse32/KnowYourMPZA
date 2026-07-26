@@ -114,7 +114,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 12
+    assert body["data_snapshot"]["ai_answer_format_version"] == 13
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
@@ -133,7 +133,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 12
+    assert body["data_snapshot"]["ai_answer_format_version"] == 13
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -336,6 +336,70 @@ def test_ai_ask_rejects_unfaithful_provider_answer(monkeypatch):
     assert model_used == "deterministic-source-summary"
 
 
+def test_ai_ask_rejects_profile_answer_with_changed_committee_name(monkeypatch):
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "Julius Malema serves on the Ad Hoc Committee to Investigate Allegations made "
+                                "by Lieutenant General Nhlanhla Mkhwanzi."
+                            )
+                        }
+                    }
+                ]
+            }
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "test-key")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_model", "openrouter/free")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_base_url", "https://openrouter.ai/api/v1")
+    monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
+    fallback = (
+        "J Malema is a South African public representative in the KnowYourMPZA records.\n\n"
+        "Linked committee work: Ad Hoc Committee to Investigate Allegations made by Lieutenant General Nhlanhla Mkhwanazi - Member."
+    )
+
+    answer, model_used = _ask_openai(
+        "who is julius malema?",
+        RetrievedEvidence(
+            intent="profile",
+            sources=[
+                {
+                    "title": "J Malema",
+                    "display_name": "J Malema",
+                    "committees": [
+                        "Ad Hoc Committee to Investigate Allegations made by Lieutenant General Nhlanhla Mkhwanazi - Member"
+                    ],
+                }
+            ],
+            coverage_notice="Profile records are source-backed.",
+        ),
+        fallback,
+    )
+
+    assert answer == fallback
+    assert model_used == "deterministic-source-summary"
+
+
 def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monkeypatch):
     monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     eff = Party(name="Economic Freedom Fighters", short_name="EFF")
@@ -386,7 +450,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 12
+    assert body["data_snapshot"]["ai_answer_format_version"] == 13
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
