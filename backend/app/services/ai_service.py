@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 13
+AI_ANSWER_FORMAT_VERSION = 14
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +94,8 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
         sources = _vote_sources(db, terms)
     elif intent == "attendance":
         sources = _attendance_sources(db, terms)
+    elif intent == "hearings":
+        sources = _hearing_sources(db, _hearing_topic_terms(question, terms))
     elif intent == "profile":
         subject = _profile_subject(question) or " ".join(terms)
         sources = _profile_sources(db, subject)
@@ -124,6 +126,7 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
             "content": (
                 "You are KnowYourMPZA's civic evidence assistant. Answer only from the supplied records. "
                 "Do not add facts that are not present. If evidence is incomplete, say so plainly. "
+                "For committee hearings, do not infer verbatim questions unless the supplied records include them. "
                 "Keep the answer concise and mention that sources are attached."
             ),
         },
@@ -217,6 +220,9 @@ def _required_ai_answer_terms(evidence: RetrievedEvidence, fallback_answer: str)
         terms.extend(source.get("committees") or [])
         return terms
 
+    if evidence.intent == "hearings":
+        return [source.get("title") for source in evidence.sources[:3] if source.get("title")]
+
     return []
 
 
@@ -309,6 +315,8 @@ def _classify_intent(question: str) -> str:
     text = question.lower()
     if re.search(r"\b(who is|who's|tell me about|profile of|what is known about)\b", text):
         return "profile"
+    if any(word in text for word in ["hearing", "hearings", "enquiry", "inquiry", "testimony", "testified", "briefing"]):
+        return "hearings"
     if any(word in text for word in ["question", "asked", " ask ", "minister", "department"]):
         return "questions"
     if any(word in text for word in ["attendance", "attend", "absent", "apology", "present"]):
@@ -357,6 +365,13 @@ def _search_terms(question: str) -> list[str]:
         "serve",
         "serves",
         "served",
+        "hearing",
+        "hearings",
+        "enquiry",
+        "inquiry",
+        "testimony",
+        "testified",
+        "briefing",
         "committee",
         "committees",
         "on",
@@ -443,6 +458,18 @@ def _is_committee_membership_question(question: str) -> bool:
 def _committee_topic_terms(question: str, terms: list[str]) -> list[str]:
     cleaned = re.sub(
         r"\b(who|which|mps?|members?|sits?|serves?|served|serve|on|the|committee|committees|of)\b",
+        " ",
+        question,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    topic_terms = _search_terms(cleaned)
+    return topic_terms or terms
+
+
+def _hearing_topic_terms(question: str, terms: list[str]) -> list[str]:
+    cleaned = re.sub(
+        r"\b(what|did|does|ask|asked|question|questions|in|during|at|the|hearing|hearings|enquiry|inquiry|testimony|testified|briefing)\b",
         " ",
         question,
         flags=re.IGNORECASE,
@@ -611,6 +638,14 @@ def _attendance_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
             }
         )
     return sources
+
+
+def _hearing_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
+    statement = select(CommitteeMeeting).order_by(CommitteeMeeting.date.desc().nullslast(), CommitteeMeeting.updated_at.desc()).limit(MAX_SOURCES)
+    filters = _filters([CommitteeMeeting.title, CommitteeMeeting.committee_name, CommitteeMeeting.summary], terms)
+    if filters:
+        statement = statement.where(or_(*filters))
+    return [_meeting_to_source(item) for item in db.scalars(statement)]
 
 
 def _profile_sources(db: Session, subject: str) -> list[dict[str, Any]]:
@@ -845,6 +880,19 @@ def _question_to_source(item: ParliamentaryQuestion) -> dict[str, Any]:
     }
 
 
+def _meeting_to_source(item: CommitteeMeeting) -> dict[str, Any]:
+    excerpt = " | ".join(part for part in [item.committee_name, item.summary] if part)
+    return {
+        "title": item.title,
+        "source_url": item.source_url or item.pmg_url,
+        "source_type": "committee_meeting",
+        "record_id": str(item.id),
+        "date": item.date.isoformat() if item.date else None,
+        "excerpt": _excerpt(excerpt),
+        "committee_name": item.committee_name,
+    }
+
+
 def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> str:
     if not evidence.sources:
         return (
@@ -857,6 +905,8 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
         return _build_committee_membership_answer(evidence)
     if evidence.intent == "questions":
         return _build_question_answer(question, evidence)
+    if evidence.intent == "hearings":
+        return _build_hearing_answer(evidence)
     lines = [
         f"Based on the source-backed records currently imported, I found {len(evidence.sources)} relevant record"
         f"{'' if len(evidence.sources) == 1 else 's'} for: {question}",
@@ -866,6 +916,35 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
         lines.append(f"- {source['title']}{f': {detail}' if detail else ''}")
     lines.append(evidence.coverage_notice)
     lines.append("Open the attached sources to verify each record.")
+    return "\n".join(lines)
+
+
+def _build_hearing_answer(evidence: RetrievedEvidence) -> str:
+    lines = [
+        f"I found {len(evidence.sources)} imported PMG committee meeting record"
+        f"{'' if len(evidence.sources) == 1 else 's'} related to this hearing or enquiry.",
+        "",
+        "Relevant source-backed meeting records:",
+    ]
+    for source in evidence.sources[:5]:
+        detail = " | ".join(part for part in [source.get("date"), source.get("committee_name")] if part)
+        excerpt = _clean_answer_excerpt(source.get("excerpt"))
+        line = f"- {_clean_display_text(source['title'])}"
+        if detail:
+            line = f"{line} ({detail})"
+        if excerpt:
+            line = f"{line}: {excerpt}"
+        lines.append(line)
+    if len(evidence.sources) > 5:
+        lines.append(f"- Plus {len(evidence.sources) - 5} more matching imported meeting records.")
+    lines.extend(
+        [
+            "",
+            "PMG meeting records are source-backed, but the imported summary may not contain a verbatim transcript of every question asked in the hearing.",
+            evidence.coverage_notice,
+            "Use the source links below to verify the meeting records.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -1112,6 +1191,7 @@ def _coverage_notice(intent: str, has_sources: bool) -> str:
         "bills": "Bills coverage is PMG-backed and may omit records not yet linked from source backfills.",
         "votes": "Vote data is source-backed where available, but individual vote records remain incomplete.",
         "profile": "This profile answer uses only source-backed identity and activity records currently linked in production.",
+        "hearings": "Committee hearing answers use imported PMG meeting records; verbatim exchanges are available only where the source record includes them.",
         "politicians": "MP identity records are source-backed, while party and committee links continue to improve through scheduled backfills.",
     }.get(intent, "KnowYourMPZA answers only from imported, source-backed records.")
     if has_sources:
