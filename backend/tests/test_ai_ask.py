@@ -118,7 +118,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
@@ -137,7 +137,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
 
 
 def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_session):
@@ -209,7 +209,7 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
     assert body["sources"][0]["status"] is None
     assert body["sources"][0]["source_url"] == "https://pmg.org.za/committee-meeting/43160/"
     assert all(source["source_url"] != "https://pmg.org.za/committee-meeting/general-laws/" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
 
 
 def test_ai_ask_extracts_person_intervention_from_hearing(monkeypatch, db_session):
@@ -240,7 +240,7 @@ def test_ai_ask_extracts_person_intervention_from_hearing(monkeypatch, db_sessio
     assert body["answer"].startswith("I found source-backed PMG meeting text where Ms Dlamini")
     assert "asked whether suspended officials had access to case dockets" in body["answer"]
     assert body["sources"][0]["source_type"] == "person_meeting_evidence"
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -560,7 +560,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
@@ -651,7 +651,7 @@ def test_ai_ask_counts_and_names_party_members(db_session, monkeypatch):
     assert "E ANC" not in body["answer"]
     assert body["sources"][0]["source_type"] == "party_member_summary"
     assert body["sources"][0]["source_url"] == "https://example.test/party/eff"
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
 
 
 def test_ai_ask_uses_party_labeled_question_names_when_party_links_missing(db_session, monkeypatch):
@@ -695,8 +695,10 @@ def test_ai_ask_uses_party_labeled_question_names_when_party_links_missing(db_se
     assert "none are directly linked to the party table yet" in body["answer"]
     assert "Ms M Dlamini" in body["answer"]
     assert "Mrs L F Tito" in body["answer"]
+    assert "parliamentary question party label" in body["answer"]
+    assert "PARLIAMENTARY_QUESTION_PARTY_LABEL" not in body["answer"]
     assert body["sources"][0]["source_type"] == "party_member_summary"
-    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+    assert body["data_snapshot"]["ai_answer_format_version"] == 20
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):

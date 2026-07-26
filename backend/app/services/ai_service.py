@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 19
+AI_ANSWER_FORMAT_VERSION = 20
 logger = logging.getLogger(__name__)
 
 
@@ -1527,16 +1527,28 @@ def _build_party_member_answer(evidence: RetrievedEvidence) -> str:
             "but none are directly linked to the party table yet."
         )
     lines = [intro, "", "Names found:"]
-    for member in members[:MAX_SOURCES]:
+    display_limit = 100 if evidence.intent == "parties" else MAX_SOURCES
+    for member in members[:display_limit]:
         label = _clean_display_text(member.get("name")) or "Unnamed politician"
         full_name = _clean_display_text(member.get("full_name"))
-        status = _clean_display_text(member.get("source_status"))
-        details = [detail for detail in [full_name if full_name and full_name != label else None, status] if detail]
+        evidence_label = _party_member_evidence_label(member)
+        details = [detail for detail in [full_name if full_name and full_name != label else None, evidence_label] if detail]
         lines.append(f"- {label}{f' ({', '.join(details)})' if details else ''}")
-    if member_count > MAX_SOURCES:
-        lines.append(f"- Plus {member_count - MAX_SOURCES} more linked politician records.")
+    if member_count > display_limit:
+        lines.append(f"- Plus {member_count - display_limit} more source-backed person records.")
     lines.extend(["", evidence.coverage_notice, "Use the source links below to verify the party and member records."])
     return "\n".join(lines)
+
+
+def _party_member_evidence_label(member: dict[str, Any]) -> str | None:
+    evidence = member.get("evidence")
+    if evidence == "politician_party_link":
+        return "direct party link"
+    if evidence == "committee_attendance_party_link":
+        return "committee attendance party label"
+    if evidence == "parliamentary_question_party_label":
+        return "parliamentary question party label"
+    return _clean_display_text(member.get("source_status"))
 
 
 def _build_profile_answer(evidence: RetrievedEvidence) -> str:
