@@ -166,7 +166,8 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
     body = response.json()
     assert body["intent"] == "hearings"
     assert body["model_used"] == "deterministic-source-summary"
-    assert "committee meeting record" in body["answer"]
+    assert body["answer"].startswith("I cannot verify the exact question")
+    assert "source-backed PMG committee meeting record" in body["answer"]
     assert "PMG meeting records are source-backed" in body["answer"]
     assert "parliamentary question" not in body["answer"].lower()
     assert body["sources"][0]["source_type"] == "committee_meeting"

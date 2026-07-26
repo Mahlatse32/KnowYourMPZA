@@ -927,7 +927,7 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
     if evidence.intent == "questions":
         return _build_question_answer(question, evidence)
     if evidence.intent == "hearings":
-        return _build_hearing_answer(evidence)
+        return _build_hearing_answer(question, evidence)
     lines = [
         f"Based on the source-backed records currently imported, I found {len(evidence.sources)} relevant record"
         f"{'' if len(evidence.sources) == 1 else 's'} for: {question}",
@@ -940,13 +940,26 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
     return "\n".join(lines)
 
 
-def _build_hearing_answer(evidence: RetrievedEvidence) -> str:
-    lines = [
-        f"I found {len(evidence.sources)} imported PMG committee meeting record"
-        f"{'' if len(evidence.sources) == 1 else 's'} related to this hearing or enquiry.",
-        "",
-        "Relevant source-backed meeting records:",
-    ]
+def _build_hearing_answer(question: str, evidence: RetrievedEvidence) -> str:
+    asks_for_verbatim_question = bool(
+        re.search(r"\b(what|which)\b.+\b(ask|asked|question|questions)\b", question, flags=re.IGNORECASE)
+    )
+    if asks_for_verbatim_question:
+        lines = [
+            "I cannot verify the exact question from the imported PMG hearing records yet.",
+            "",
+            f"What I can verify is that {len(evidence.sources)} source-backed PMG committee meeting record"
+            f"{'' if len(evidence.sources) == 1 else 's'} match this hearing or enquiry.",
+            "",
+            "Relevant PMG records:",
+        ]
+    else:
+        lines = [
+            f"I found {len(evidence.sources)} imported PMG committee meeting record"
+            f"{'' if len(evidence.sources) == 1 else 's'} related to this hearing or enquiry.",
+            "",
+            "Relevant source-backed meeting records:",
+        ]
     for source in evidence.sources[:5]:
         detail = " | ".join(part for part in [source.get("date"), source.get("committee_name")] if part)
         excerpt = _clean_answer_excerpt(source.get("excerpt"))
