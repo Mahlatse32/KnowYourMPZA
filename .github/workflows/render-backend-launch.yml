@@ -143,7 +143,7 @@ jobs:
           }
           payload = {"clearCache": "do_not_clear", "commitId": commit_id}
           req = urllib.request.Request(
-              f"https://api.render.com/v1/services/{service_id}/deploy",
+              f"https://api.render.com/v1/services/{service_id}/deploys",
               data=json.dumps(payload).encode("utf-8"),
               method="POST",
               headers=headers,
