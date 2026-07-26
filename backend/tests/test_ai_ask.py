@@ -115,7 +115,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 14
+    assert body["data_snapshot"]["ai_answer_format_version"] == 15
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
@@ -134,18 +134,26 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 14
+    assert body["data_snapshot"]["ai_answer_format_version"] == 15
 
 
 def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_session):
     monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
-    db_session.add(
-        CommitteeMeeting(
-            title="Ad Hoc Committee to Investigate Allegations made by Lieutenant General Nhlanhla Mkhwanazi",
-            committee_name="Ad Hoc Committee",
-            summary="The committee held a hearing on the allegations and received evidence from officials.",
-            source_url="https://pmg.org.za/committee-meeting/43160/",
-        )
+    db_session.add_all(
+        [
+            CommitteeMeeting(
+                title="Ad Hoc Committee to Investigate Allegations made by Lieutenant General Nhlanhla Mkhwanazi",
+                committee_name="Ad Hoc Committee",
+                summary="The committee held a hearing on the allegations and received evidence from officials.",
+                source_url="https://pmg.org.za/committee-meeting/43160/",
+            ),
+            CommitteeMeeting(
+                title="General Laws briefing",
+                committee_name="Finance",
+                summary="A general briefing on anti-money laundering laws.",
+                source_url="https://pmg.org.za/committee-meeting/general-laws/",
+            ),
+        ]
     )
     db_session.commit()
 
@@ -163,7 +171,8 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
     assert "parliamentary question" not in body["answer"].lower()
     assert body["sources"][0]["source_type"] == "committee_meeting"
     assert body["sources"][0]["source_url"] == "https://pmg.org.za/committee-meeting/43160/"
-    assert body["data_snapshot"]["ai_answer_format_version"] == 14
+    assert all(source["source_url"] != "https://pmg.org.za/committee-meeting/general-laws/" for source in body["sources"])
+    assert body["data_snapshot"]["ai_answer_format_version"] == 15
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -189,6 +198,9 @@ def test_ai_display_text_cleans_common_mojibake():
 
 
     assert _clean_display_text("Juliusâ¯Malema â source ãsourceã") == "Julius Malema - source"
+
+
+    assert _clean_display_text("Anti-Money Launderingâ¦ briefing") == "Anti-Money Laundering... briefing"
 
 
 def test_ai_ask_uses_openai_when_configured(monkeypatch):
@@ -480,7 +492,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 14
+    assert body["data_snapshot"]["ai_answer_format_version"] == 15
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):

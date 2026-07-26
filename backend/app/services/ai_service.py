@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 14
+AI_ANSWER_FORMAT_VERSION = 15
 logger = logging.getLogger(__name__)
 
 
@@ -469,7 +469,7 @@ def _committee_topic_terms(question: str, terms: list[str]) -> list[str]:
 
 def _hearing_topic_terms(question: str, terms: list[str]) -> list[str]:
     cleaned = re.sub(
-        r"\b(what|did|does|ask|asked|question|questions|in|during|at|the|hearing|hearings|enquiry|inquiry|testimony|testified|briefing)\b",
+        r"\b(what|did|does|ask|asked|question|questions|in|during|at|the|hearing|hearings|enquiry|inquiry|testimony|testified|briefing|lieutenant|general)\b",
         " ",
         question,
         flags=re.IGNORECASE,
@@ -641,11 +641,32 @@ def _attendance_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
 
 
 def _hearing_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
-    statement = select(CommitteeMeeting).order_by(CommitteeMeeting.date.desc().nullslast(), CommitteeMeeting.updated_at.desc()).limit(MAX_SOURCES)
+    statement = select(CommitteeMeeting).order_by(CommitteeMeeting.date.desc().nullslast(), CommitteeMeeting.updated_at.desc()).limit(MAX_SOURCES * 4)
     filters = _filters([CommitteeMeeting.title, CommitteeMeeting.committee_name, CommitteeMeeting.summary], terms)
     if filters:
         statement = statement.where(or_(*filters))
-    return [_meeting_to_source(item) for item in db.scalars(statement)]
+    scored = sorted(
+        ((item, _meeting_match_score(item, terms)) for item in db.scalars(statement)),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    strong = [item for item, score in scored if score >= 2]
+    if not strong and scored:
+        strong = [item for item, score in scored if score > 0]
+    return [_meeting_to_source(item) for item in strong[:MAX_SOURCES]]
+
+
+def _meeting_match_score(meeting: CommitteeMeeting, terms: list[str]) -> int:
+    text = " ".join(part for part in [meeting.title, meeting.committee_name, meeting.summary] if part).lower()
+    tokens = set(re.findall(r"[a-z][a-z0-9+-]{2,}", text))
+    score = 0
+    for term in terms:
+        normalized = term.lower()
+        if normalized in tokens:
+            score += 3 if len(normalized) >= 6 else 1
+        elif normalized and normalized in text:
+            score += 1
+    return score
 
 
 def _profile_sources(db: Session, subject: str) -> list[dict[str, Any]]:
@@ -1100,6 +1121,8 @@ def _clean_display_text(value: str | None) -> str:
         "Ã¢ÂÂ": "-",
         "â€”": "-",
         "—": "-",
+        "â¦": "...",
+        "…": "...",
         "ã": "[",
         "ã": "]",
         "ãsourceã": "",
