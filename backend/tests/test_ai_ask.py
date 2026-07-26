@@ -1,5 +1,6 @@
 import pytest
 import importlib
+from datetime import date
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
@@ -8,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.db import Base, get_db
 from app.main import app
 from app.models.committee import Committee
+from app.models.committee_attendance import CommitteeAttendance
 from app.models.committee_meeting import CommitteeMeeting
 from app.models.committee_membership import CommitteeMembership
 from app.models.ai_answer import AiAnswer
@@ -115,7 +117,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 16
+    assert body["data_snapshot"]["ai_answer_format_version"] == 17
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
@@ -134,19 +136,39 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 16
+    assert body["data_snapshot"]["ai_answer_format_version"] == 17
 
 
 def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_session):
     monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
+    party = Party(name="Economic Freedom Fighters", short_name="EFF")
+    db_session.add(party)
+    db_session.flush()
+    politician = Politician(
+        full_name="Julius Sello Malema",
+        display_name="J Malema",
+        slug="j-malema",
+        party_id=party.id,
+        profile_url="https://www.pa.org.za/person/julius-sello-malema/",
+        source_status="PA_VERIFIED",
+    )
+    db_session.add(politician)
+    db_session.flush()
+    meeting = CommitteeMeeting(
+        title="Mkhwanazi Inquiry: Presentation of Evidentiary Report by Evidence Leaders",
+        committee_name="Ad Hoc Committee to Investigate Allegations made by Lieutenant General Nhlanhla Mkhwanazi",
+        summary=(
+            "The Chairperson explained that the meeting would consider the evidentiary report. "
+            "Mr Vhonani Ramaano, Committee Secretary, informed the Committee that apologies had been "
+            "received from Mr Malema and Ms Mathys, who had indicated that they had prior commitments. "
+            "The evidence leader then discussed the Political Killings Task Team and the transfer of 121 dockets."
+        ),
+        date=date(2026, 5, 28),
+        source_url="https://pmg.org.za/committee-meeting/43160/",
+    )
     db_session.add_all(
         [
-            CommitteeMeeting(
-                title="Ad Hoc Committee to Investigate Allegations made by Lieutenant General Nhlanhla Mkhwanazi",
-                committee_name="Ad Hoc Committee",
-                summary="The committee held a hearing on the allegations and received evidence from officials.",
-                source_url="https://pmg.org.za/committee-meeting/43160/",
-            ),
+            meeting,
             CommitteeMeeting(
                 title="General Laws briefing",
                 committee_name="Finance",
@@ -154,6 +176,16 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
                 source_url="https://pmg.org.za/committee-meeting/general-laws/",
             ),
         ]
+    )
+    db_session.flush()
+    db_session.add(
+        CommitteeAttendance(
+            meeting_id=meeting.id,
+            politician_id=politician.id,
+            name_raw="Mr Malema",
+            attendance_status="apology",
+            source_url="https://pmg.org.za/committee-meeting/43160/",
+        )
     )
     db_session.commit()
 
@@ -166,14 +198,46 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
     body = response.json()
     assert body["intent"] == "hearings"
     assert body["model_used"] == "deterministic-source-summary"
-    assert body["answer"].startswith("I cannot verify the exact question")
-    assert "source-backed PMG committee meeting record" in body["answer"]
-    assert "PMG meeting records are source-backed" in body["answer"]
+    assert body["answer"].startswith("I could not find a source-backed record of Julius Malema asking a question")
+    assert "mentioned as having sent apologies, not as having spoken" in body["answer"]
+    assert "Political Killings Task Team" in body["answer"]
     assert "parliamentary question" not in body["answer"].lower()
-    assert body["sources"][0]["source_type"] == "committee_meeting"
+    assert body["sources"][0]["source_type"] == "person_meeting_evidence"
+    assert body["sources"][0]["status"] is None
     assert body["sources"][0]["source_url"] == "https://pmg.org.za/committee-meeting/43160/"
     assert all(source["source_url"] != "https://pmg.org.za/committee-meeting/general-laws/" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 16
+    assert body["data_snapshot"]["ai_answer_format_version"] == 17
+
+
+def test_ai_ask_extracts_person_intervention_from_hearing(monkeypatch, db_session):
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
+    db_session.add(
+        CommitteeMeeting(
+            title="SAPS corruption inquiry",
+            committee_name="Police",
+            summary=(
+                "The Committee discussed police corruption allegations. "
+                "Ms Dlamini asked whether suspended officials had access to case dockets. "
+                "The Minister said the department would submit a written reply."
+            ),
+            date=date(2026, 6, 1),
+            source_url="https://pmg.org.za/committee-meeting/saps-corruption/",
+        )
+    )
+    db_session.commit()
+
+    response = client.post(
+        "/ai/ask",
+        json={"question": "what did Ms Dlamini ask in the SAPS corruption hearing?"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "hearings"
+    assert body["answer"].startswith("I found source-backed PMG meeting text where Ms Dlamini")
+    assert "asked whether suspended officials had access to case dockets" in body["answer"]
+    assert body["sources"][0]["source_type"] == "person_meeting_evidence"
+    assert body["data_snapshot"]["ai_answer_format_version"] == 17
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -493,7 +557,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 16
+    assert body["data_snapshot"]["ai_answer_format_version"] == 17
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
