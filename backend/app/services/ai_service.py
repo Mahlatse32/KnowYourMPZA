@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 15
+AI_ANSWER_FORMAT_VERSION = 16
 logger = logging.getLogger(__name__)
 
 
