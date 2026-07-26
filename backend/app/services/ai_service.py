@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 11
+AI_ANSWER_FORMAT_VERSION = 12
 logger = logging.getLogger(__name__)
 
 
@@ -129,13 +129,14 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
         },
         {
             "role": "user",
-            "content": (
-                f"Question: {question}\n"
-                f"Intent: {evidence.intent}\n"
-                f"Coverage notice: {evidence.coverage_notice}\n"
-                f"Records: {evidence.sources}"
-            ),
-        },
+                "content": (
+                    f"Question: {question}\n"
+                    f"Intent: {evidence.intent}\n"
+                    f"Coverage notice: {evidence.coverage_notice}\n"
+                    f"Source-backed draft answer to preserve exactly: {fallback_answer}\n"
+                    f"Records: {evidence.sources}"
+                ),
+            },
     ]
     responses_payload = {
         "model": settings.ai_model,
@@ -153,7 +154,7 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
                     body = response.json()
                     output = _openai_responses_text(body)
                     if output:
-                        return output, settings.ai_model
+                        return _accepted_ai_answer(output, evidence, fallback_answer)
                     logger.warning("OpenAI Responses API returned no answer text for model %s", settings.ai_model)
                 else:
                     _log_openai_failure("Responses API", response)
@@ -166,7 +167,7 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
             if chat_response.is_success:
                 output = _openai_chat_text(chat_response.json())
                 if output:
-                    return output, settings.ai_model
+                    return _accepted_ai_answer(output, evidence, fallback_answer)
                 logger.warning("OpenAI Chat Completions API returned no answer text for model %s", settings.ai_model)
             else:
                 _log_openai_failure("Chat Completions API", chat_response)
@@ -175,6 +176,51 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
         return fallback_answer, "deterministic-source-summary"
 
     return fallback_answer, "deterministic-source-summary"
+
+
+def _accepted_ai_answer(output: str, evidence: RetrievedEvidence, fallback_answer: str) -> tuple[str, str]:
+    cleaned = _clean_display_text(output)
+    if _is_ai_answer_faithful(cleaned, evidence, fallback_answer):
+        return cleaned, settings.ai_model
+    logger.warning("AI provider answer failed faithfulness checks for intent %s; using deterministic fallback", evidence.intent)
+    return fallback_answer, "deterministic-source-summary"
+
+
+def _is_ai_answer_faithful(answer: str, evidence: RetrievedEvidence, fallback_answer: str) -> bool:
+    normalized_answer = _normalize_for_faithfulness(answer)
+    required_terms = _required_ai_answer_terms(evidence, fallback_answer)
+    return all(_normalize_for_faithfulness(term) in normalized_answer for term in required_terms)
+
+
+def _required_ai_answer_terms(evidence: RetrievedEvidence, fallback_answer: str) -> list[str]:
+    if evidence.intent == "questions":
+        terms = [str(len(evidence.sources))]
+        askers = [
+            asker
+            for asker in _unique_values(source.get("asked_by") for source in evidence.sources)
+            if asker.lower() != "mp not yet linked"
+        ]
+        terms.extend(askers[:3])
+        if evidence.answer_kind == "questions_by_person_topic" and evidence.subject:
+            terms.append(evidence.subject)
+        return terms
+
+    if evidence.intent == "committees" and evidence.sources and evidence.sources[0].get("source_type") == "committee_membership_summary":
+        members = evidence.sources[0].get("members") or []
+        return [_member_label(member).split(" (", 1)[0] for member in members[:MAX_SOURCES]]
+
+    if evidence.intent == "profile" and evidence.sources:
+        source = evidence.sources[0]
+        name = source.get("full_name") or source.get("display_name") or source.get("title") or fallback_answer.split(" ", 1)[0]
+        tokens = _name_tokens(name)
+        return [tokens[-1] if tokens else str(name)]
+
+    return []
+
+
+def _normalize_for_faithfulness(value: str) -> str:
+    cleaned = _clean_display_text(value).lower()
+    return re.sub(r"[^a-z0-9]+", " ", cleaned).strip()
 
 
 def _openai_responses_text(body: dict[str, Any]) -> str | None:
@@ -963,13 +1009,20 @@ def _clean_display_text(value: str | None) -> str:
         "â€™": "'",
         "’": "'",
         "‘": "'",
+        "â¯": " ",
+        "\u202f": " ",
+        "â": "-",
+        "\u2011": "-",
         "â": "-",
         "Ã¢ÂÂ": "-",
         "â€”": "-",
         "—": "-",
+        "ãsourceã": "",
+        "【source】": "",
     }
     for bad, good in replacements.items():
         cleaned = cleaned.replace(bad, good)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned
 
 

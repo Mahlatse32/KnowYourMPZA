@@ -114,7 +114,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 11
+    assert body["data_snapshot"]["ai_answer_format_version"] == 12
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
@@ -133,7 +133,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 11
+    assert body["data_snapshot"]["ai_answer_format_version"] == 12
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -158,6 +158,9 @@ def test_ai_display_text_cleans_common_mojibake():
     assert _clean_display_text("Question Ã¢ÂÂ reply") == "Question - reply"
 
 
+    assert _clean_display_text("Juliusâ¯Malema â source ãsourceã") == "Julius Malema - source"
+
+
 def test_ai_ask_uses_openai_when_configured(monkeypatch):
     class FakeResponse:
         is_success = True
@@ -165,7 +168,7 @@ def test_ai_ask_uses_openai_when_configured(monkeypatch):
         text = ""
 
         def json(self):
-            return {"output_text": "A source-backed OpenAI answer."}
+            return {"output_text": "J Malema is described by source-backed records."}
 
     class FakeClient:
         def __init__(self, timeout):
@@ -190,7 +193,7 @@ def test_ai_ask_uses_openai_when_configured(monkeypatch):
         "fallback",
     )
 
-    assert answer == "A source-backed OpenAI answer."
+    assert answer == "J Malema is described by source-backed records."
     assert model_used == "gpt-test"
 
 
@@ -218,7 +221,7 @@ def test_ai_ask_falls_back_to_chat_completions_when_responses_fails(monkeypatch)
         def post(self, url, *args, **kwargs):
             if url.endswith("/responses"):
                 return FakeResponse(400, {"error": "not supported"})
-            return FakeResponse(200, {"choices": [{"message": {"content": "Chat fallback answer."}}]})
+            return FakeResponse(200, {"choices": [{"message": {"content": "J Malema chat fallback answer."}}]})
 
     monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "test-key")
     monkeypatch.setattr("app.services.ai_service.settings.ai_model", "gpt-test")
@@ -230,7 +233,7 @@ def test_ai_ask_falls_back_to_chat_completions_when_responses_fails(monkeypatch)
         "fallback",
     )
 
-    assert answer == "Chat fallback answer."
+    assert answer == "J Malema chat fallback answer."
     assert model_used == "gpt-test"
 
 
@@ -243,7 +246,7 @@ def test_ai_ask_uses_chat_directly_for_openai_compatible_providers(monkeypatch):
         text = ""
 
         def json(self):
-            return {"choices": [{"message": {"content": "OpenRouter answer."}}]}
+            return {"choices": [{"message": {"content": "J Malema OpenRouter answer."}}]}
 
     class FakeClient:
         def __init__(self, timeout):
@@ -272,11 +275,65 @@ def test_ai_ask_uses_chat_directly_for_openai_compatible_providers(monkeypatch):
         "fallback",
     )
 
-    assert answer == "OpenRouter answer."
+    assert answer == "J Malema OpenRouter answer."
     assert model_used == "openrouter/free-model"
     assert seen["urls"] == ["https://openrouter.ai/api/v1/chat/completions"]
     assert seen["headers"][0]["HTTP-Referer"] == "https://knowyourmpza.vercel.app"
     assert seen["headers"][0]["X-Title"] == "KnowYourMPZA"
+
+
+def test_ai_ask_rejects_unfaithful_provider_answer(monkeypatch):
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "Only Hc Kruger asked about Eskom."}}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, *args, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "test-key")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_model", "openrouter/free")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_base_url", "https://openrouter.ai/api/v1")
+    monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
+    fallback = (
+        "I found 8 imported parliamentary question records mentioning Eskom. "
+        "The records include questions from Ms M Dlamini (EFF), Mr T S Mjadu (MK), and Hc Kruger."
+    )
+
+    answer, model_used = _ask_openai(
+        "Which MPs asked questions about Eskom?",
+        RetrievedEvidence(
+            intent="questions",
+            sources=[
+                {"asked_by": "Ms M Dlamini (EFF)", "title": "NW1025"},
+                {"asked_by": "Mr T S Mjadu (MK)", "title": "NW3636"},
+                {"asked_by": "Hc Kruger", "title": "NW3164"},
+                {"asked_by": None, "title": "CW688"},
+                {"asked_by": None, "title": "NW3411"},
+                {"asked_by": None, "title": "NW613"},
+                {"asked_by": None, "title": "NW614"},
+                {"asked_by": None, "title": "NW615"},
+            ],
+            coverage_notice="Questions are still backfilling.",
+        ),
+        fallback,
+    )
+
+    assert answer == fallback
+    assert model_used == "deterministic-source-summary"
 
 
 def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monkeypatch):
@@ -329,7 +386,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 11
+    assert body["data_snapshot"]["ai_answer_format_version"] == 12
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
