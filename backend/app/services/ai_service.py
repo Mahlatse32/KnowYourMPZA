@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 18
+AI_ANSWER_FORMAT_VERSION = 19
 logger = logging.getLogger(__name__)
 
 
@@ -686,15 +686,18 @@ def _party_member_sources(db: Session, question: str) -> list[dict[str, Any]]:
             .limit(500)
         )
     )
-    member_rows = [
+    linked_member_rows = [
         {
             "name": _clean_display_text(member.display_name),
             "full_name": _clean_display_text(member.full_name),
             "source_url": member.profile_url,
             "source_status": member.source_status,
+            "evidence": "politician_party_link",
         }
         for member in members
     ]
+    labeled_member_rows = _party_labeled_people_sources(db, party)
+    member_rows = _merge_party_member_rows([*linked_member_rows, *labeled_member_rows])
     names = [member["name"] for member in member_rows]
     return [
         {
@@ -707,9 +710,82 @@ def _party_member_sources(db: Session, question: str) -> list[dict[str, Any]]:
             "party_name": party.name,
             "party_short_name": party.short_name,
             "member_count": len(member_rows),
+            "linked_member_count": len(linked_member_rows),
+            "party_labeled_count": len([member for member in member_rows if member.get("evidence") != "politician_party_link"]),
             "members": member_rows,
         }
     ]
+
+
+def _party_labeled_people_sources(db: Session, party: Party) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    label_pattern = f"%({party.short_name})%"
+    for question in db.scalars(
+        select(ParliamentaryQuestion)
+        .where(ParliamentaryQuestion.asked_by_name.ilike(label_pattern))
+        .order_by(ParliamentaryQuestion.asked_date.desc().nullslast(), ParliamentaryQuestion.created_at.desc())
+        .limit(200)
+    ):
+        name = _clean_party_labeled_name(question.asked_by_name, party.short_name)
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "full_name": name,
+                "source_url": question.source_url,
+                "source_status": "PARLIAMENTARY_QUESTION_PARTY_LABEL",
+                "evidence": "parliamentary_question_party_label",
+            }
+        )
+    attendance_rows = db.scalars(
+        select(CommitteeAttendance)
+        .where(CommitteeAttendance.party_id == party.id)
+        .order_by(CommitteeAttendance.created_at.desc())
+        .limit(200)
+    )
+    for attendance in attendance_rows:
+        name = _clean_display_text(attendance.name_raw)
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "full_name": name,
+                "source_url": attendance.source_url,
+                "source_status": "COMMITTEE_ATTENDANCE_PARTY_LINK",
+                "evidence": "committee_attendance_party_link",
+            }
+        )
+    return rows
+
+
+def _clean_party_labeled_name(value: str | None, party_short_name: str) -> str | None:
+    if not value:
+        return None
+    cleaned = re.sub(rf"\s*\(\s*{re.escape(party_short_name)}\s*\)\s*", " ", value, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;")
+    return _clean_display_text(cleaned) or None
+
+
+def _merge_party_member_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    evidence_rank = {
+        "politician_party_link": 0,
+        "committee_attendance_party_link": 1,
+        "parliamentary_question_party_label": 2,
+    }
+    for row in rows:
+        name = _clean_display_text(row.get("name"))
+        if not name:
+            continue
+        key = " ".join(_name_tokens(name))
+        if not key:
+            continue
+        current = merged.get(key)
+        if current is None or evidence_rank.get(row.get("evidence"), 9) < evidence_rank.get(current.get("evidence"), 9):
+            merged[key] = {**row, "name": name}
+    return sorted(merged.values(), key=lambda row: row["name"])
 
 
 def _resolve_party_from_question(db: Session, question: str) -> Party | None:
@@ -1426,6 +1502,8 @@ def _build_party_member_answer(evidence: RetrievedEvidence) -> str:
     party_name = _clean_display_text(source.get("party_short_name") or source.get("party_name") or source["title"])
     members = source.get("members") or []
     member_count = source.get("member_count") if source.get("member_count") is not None else len(members)
+    linked_count = source.get("linked_member_count") or 0
+    labeled_count = source.get("party_labeled_count") or 0
     if not members:
         return "\n".join(
             [
@@ -1435,11 +1513,20 @@ def _build_party_member_answer(evidence: RetrievedEvidence) -> str:
                 "Use the source link below to verify the party record.",
             ]
         )
-    lines = [
-        f"I found {member_count} imported politician record{'' if member_count == 1 else 's'} linked to {party_name}.",
-        "",
-        "Linked members:",
-    ]
+    if linked_count and labeled_count:
+        intro = (
+            f"I found {member_count} source-backed person record{'' if member_count == 1 else 's'} associated with {party_name}: "
+            f"{linked_count} directly linked politician record{'' if linked_count == 1 else 's'} and "
+            f"{labeled_count} additional source-labeled record{'' if labeled_count == 1 else 's'}."
+        )
+    elif linked_count:
+        intro = f"I found {linked_count} imported politician record{'' if linked_count == 1 else 's'} directly linked to {party_name}."
+    else:
+        intro = (
+            f"I found {member_count} source-backed person record{'' if member_count == 1 else 's'} labeled as {party_name} in imported records, "
+            "but none are directly linked to the party table yet."
+        )
+    lines = [intro, "", "Names found:"]
     for member in members[:MAX_SOURCES]:
         label = _clean_display_text(member.get("name")) or "Unnamed politician"
         full_name = _clean_display_text(member.get("full_name"))
