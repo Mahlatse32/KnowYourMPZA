@@ -2,9 +2,9 @@
 
 KnowYourMPZA is a verified South African political data backend. It stores MPs, parties, committee memberships, source documents, raw HTML archives, aliases, and document mentions so downstream products can answer evidence-backed questions about Members of Parliament.
 
-It is not a chatbot. V1 intentionally excludes AI, OpenSearch, pgvector, authentication, payments, bills, and voting records.
+It is not a general chatbot. V1 uses a constrained Ask layer that retrieves source-backed records from PostgreSQL first, then optionally uses an OpenAI-compatible text model to make the answer easier to read. If the model provider is unavailable or out of quota, the backend returns a deterministic source-backed summary instead.
 
-V1 adds a simple public website for searching and browsing the source-backed dataset. V1 still intentionally excludes LLM summaries, chat, authentication, payments, bills, and voting records.
+V1 adds a simple public website for searching, browsing, and asking questions over the source-backed dataset. V1 still intentionally excludes authentication and payments.
 
 ## MVP Features
 
@@ -29,6 +29,7 @@ V1 adds a simple public website for searching and browsing the source-backed dat
 - CI and guarded scheduled ingestion workflows.
 - Browse endpoints for parties, committees, and documents.
 - Browse endpoints for parliamentary questions.
+- Source-backed Ask endpoint with SQL retrieval, provider-backed wording, answer caching, and deterministic fallback.
 - Discovery scripts for parliamentary question listings and PDF sources.
 - Basic pytest coverage for the main product path.
 
@@ -389,7 +390,26 @@ DATABASE_URL=postgresql+psycopg://<user>:<pass>@<host>/<db>
 ENVIRONMENT=production
 CORS_ORIGIN=https://your-frontend.example
 INGESTION_ENABLED=false
+AI_API_KEY=<optional server-side model provider key>
+AI_MODEL=gpt-5-mini
+AI_BASE_URL=https://api.openai.com/v1
+AI_APP_URL=https://your-frontend.example
+AI_APP_TITLE=KnowYourMPZA
 ```
+
+The Ask endpoint retrieves evidence with backend SQL queries first. The model provider is used only to turn those source-backed records into friendlier prose. If `AI_API_KEY` is missing, rate-limited, or invalid, `/ai/ask` still returns a deterministic source-backed answer.
+
+For a free-tier or low-cost beta provider, use an OpenAI-compatible chat provider such as OpenRouter:
+
+```text
+AI_API_KEY=<OpenRouter key>
+AI_MODEL=<free OpenRouter model id>
+AI_BASE_URL=https://openrouter.ai/api/v1
+AI_APP_URL=https://your-frontend.example
+AI_APP_TITLE=KnowYourMPZA
+```
+
+Legacy `OPENAI_API_KEY`, `OPENAI_MODEL`, and `OPENAI_BASE_URL` environment variables are still accepted for compatibility.
 
 The start command is baked into the Dockerfile:
 
