@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 10
+AI_ANSWER_FORMAT_VERSION = 11
 logger = logging.getLogger(__name__)
 
 
@@ -138,45 +138,40 @@ def _ask_openai(question: str, evidence: RetrievedEvidence, fallback_answer: str
         },
     ]
     responses_payload = {
-        "model": settings.openai_model,
+        "model": settings.ai_model,
         "input": messages,
     }
     try:
         with httpx.Client(timeout=30) as client:
-            response = client.post(
-                f"{settings.openai_base_url.rstrip('/')}/responses",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=responses_payload,
-            )
-            if response.is_success:
-                body = response.json()
-                output = _openai_responses_text(body)
-                if output:
-                    return output, settings.openai_model
-                logger.warning("OpenAI Responses API returned no answer text for model %s", settings.openai_model)
-            else:
-                _log_openai_failure("Responses API", response)
+            if _supports_responses_api():
+                response = client.post(
+                    f"{settings.ai_base_url.rstrip('/')}/responses",
+                    headers=_ai_headers(api_key),
+                    json=responses_payload,
+                )
+                if response.is_success:
+                    body = response.json()
+                    output = _openai_responses_text(body)
+                    if output:
+                        return output, settings.ai_model
+                    logger.warning("OpenAI Responses API returned no answer text for model %s", settings.ai_model)
+                else:
+                    _log_openai_failure("Responses API", response)
 
             chat_response = client.post(
-                f"{settings.openai_base_url.rstrip('/')}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"model": settings.openai_model, "messages": messages},
+                f"{settings.ai_base_url.rstrip('/')}/chat/completions",
+                headers=_ai_headers(api_key),
+                json={"model": settings.ai_model, "messages": messages},
             )
             if chat_response.is_success:
                 output = _openai_chat_text(chat_response.json())
                 if output:
-                    return output, settings.openai_model
-                logger.warning("OpenAI Chat Completions API returned no answer text for model %s", settings.openai_model)
+                    return output, settings.ai_model
+                logger.warning("OpenAI Chat Completions API returned no answer text for model %s", settings.ai_model)
             else:
                 _log_openai_failure("Chat Completions API", chat_response)
     except Exception:
-        logger.exception("OpenAI answer generation failed for model %s; using deterministic fallback", settings.openai_model)
+        logger.exception("OpenAI answer generation failed for model %s; using deterministic fallback", settings.ai_model)
         return fallback_answer, "deterministic-source-summary"
 
     return fallback_answer, "deterministic-source-summary"
@@ -208,7 +203,7 @@ def _log_openai_failure(api_name: str, response: httpx.Response) -> None:
     logger.warning(
         "OpenAI %s request failed for model %s with status %s: %s",
         api_name,
-        settings.openai_model,
+        settings.ai_model,
         response.status_code,
         body_snippet,
     )
@@ -218,7 +213,7 @@ def _data_snapshot(db: Session) -> dict[str, int]:
     return {
         "ai_answer_format_version": AI_ANSWER_FORMAT_VERSION,
         "openai_configured": 1 if _openai_api_key() else 0,
-        "openai_model_fingerprint": _stable_text_fingerprint(settings.openai_model),
+        "openai_model_fingerprint": _stable_text_fingerprint(settings.ai_model),
         "politicians": db.scalar(select(func.count()).select_from(Politician)) or 0,
         "committees": db.scalar(select(func.count()).select_from(Committee)) or 0,
         "committee_meetings": db.scalar(select(func.count()).select_from(CommitteeMeeting)) or 0,
@@ -230,7 +225,29 @@ def _data_snapshot(db: Session) -> dict[str, int]:
 
 
 def _openai_api_key() -> str:
-    return settings.openai_api_key.strip().strip('"').strip("'")
+    return settings.ai_api_key.strip().strip('"').strip("'")
+
+
+def _ai_headers(api_key: str) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    if _is_openrouter_base_url():
+        app_url = settings.ai_app_url.strip()
+        if app_url:
+            headers["HTTP-Referer"] = app_url
+        headers["X-Title"] = settings.ai_app_title.strip() or settings.app_name
+    return headers
+
+
+def _supports_responses_api() -> bool:
+    base_url = settings.ai_base_url.lower()
+    return "api.openai.com" in base_url
+
+
+def _is_openrouter_base_url() -> bool:
+    return "openrouter.ai" in settings.ai_base_url.lower()
 
 
 def _stable_text_fingerprint(value: str) -> int:

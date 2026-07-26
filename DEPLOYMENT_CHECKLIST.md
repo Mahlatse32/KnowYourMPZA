@@ -46,8 +46,11 @@ Backend service:
 | `DATABASE_URL` | yes | Production PostgreSQL connection string using `postgresql+psycopg://...`. |
 | `ENVIRONMENT` | yes | Set to `production`. |
 | `CORS_ORIGIN` | yes | Comma-separated frontend origins. |
-| `OPENAI_API_KEY` | no | Enables model-written `/ai/ask` answers. If omitted, the endpoint returns deterministic source-backed summaries. |
-| `OPENAI_MODEL` | no | Defaults to `gpt-5-mini`. Override only after answer-quality and cost testing. |
+| `AI_API_KEY` | no | Enables model-written `/ai/ask` answers using an OpenAI-compatible provider. If omitted, the endpoint returns deterministic source-backed summaries. Legacy `OPENAI_API_KEY` is also accepted. |
+| `AI_MODEL` | no | Defaults to `gpt-5-mini`. For free-tier beta usage, set this to the selected provider model id. Legacy `OPENAI_MODEL` is also accepted. |
+| `AI_BASE_URL` | no | Defaults to `https://api.openai.com/v1`. Use `https://openrouter.ai/api/v1` for OpenRouter or another OpenAI-compatible provider base URL. Legacy `OPENAI_BASE_URL` is also accepted. |
+| `AI_APP_URL` | no | Public frontend URL, sent as provider metadata for OpenRouter-style providers. |
+| `AI_APP_TITLE` | no | Defaults to `KnowYourMPZA`, sent as provider metadata for OpenRouter-style providers. |
 | `INGESTION_ENABLED` | no for web service | Keep `false` on the web service unless intentionally ingesting from the service process. |
 | `PEOPLE_ASSEMBLY_BASE_URL` | no | Default is `https://www.pa.org.za`. |
 | `PEOPLE_ASSEMBLY_MEMBER_LIST_URLS` | no | Optional PA member list override. |
@@ -82,6 +85,7 @@ Frontend service:
 - [ ] `GET /parties?limit=10` includes non-Unknown party records.
 - [ ] `GET /questions?limit=10` returns source-backed records.
 - [ ] `POST /ai/ask` returns an answer with source links and a coverage notice.
+- [ ] If `AI_API_KEY` is configured, `POST /ai/ask` reports the configured model in `model_used`; if quota is exhausted, it safely reports `deterministic-source-summary`.
 - [ ] Frontend search returns at least one known MP.
 - [ ] An MP profile opens and displays source links.
 - [ ] Attendance panel either shows records or the honest in-progress empty state.

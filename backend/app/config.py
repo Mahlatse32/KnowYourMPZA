@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,9 +15,11 @@ class Settings(BaseSettings):
         default="https://www.pa.org.za/position/member/parliament/",
         validation_alias="PEOPLE_ASSEMBLY_MEMBER_LIST_URLS",
     )
-    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-5-mini", validation_alias="OPENAI_MODEL")
-    openai_base_url: str = Field(default="https://api.openai.com/v1", validation_alias="OPENAI_BASE_URL")
+    ai_api_key: str = Field(default="", validation_alias=AliasChoices("AI_API_KEY", "OPENAI_API_KEY"))
+    ai_model: str = Field(default="gpt-5-mini", validation_alias=AliasChoices("AI_MODEL", "OPENAI_MODEL"))
+    ai_base_url: str = Field(default="https://api.openai.com/v1", validation_alias=AliasChoices("AI_BASE_URL", "OPENAI_BASE_URL"))
+    ai_app_url: str = Field(default="", validation_alias="AI_APP_URL")
+    ai_app_title: str = Field(default="KnowYourMPZA", validation_alias="AI_APP_TITLE")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -32,6 +34,18 @@ class Settings(BaseSettings):
     @property
     def people_assembly_listing_urls(self) -> list[str]:
         return [url.strip() for url in self.people_assembly_member_list_urls.split(",") if url.strip()]
+
+    @property
+    def openai_api_key(self) -> str:
+        return self.ai_api_key
+
+    @property
+    def openai_model(self) -> str:
+        return self.ai_model
+
+    @property
+    def openai_base_url(self) -> str:
+        return self.ai_base_url
 
 
 settings = Settings()

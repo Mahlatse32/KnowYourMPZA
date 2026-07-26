@@ -96,7 +96,7 @@ def _ingest_multiple_eskom_questions(monkeypatch, db_session):
 
 
 def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_session):
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     source_url = _ingest_eskom_question(monkeypatch, db_session)
 
     response = client.post("/ai/ask", json={"question": "Which MPs asked questions about Eskom?"})
@@ -114,12 +114,12 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 10
+    assert body["data_snapshot"]["ai_answer_format_version"] == 11
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
 def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session):
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     _ingest_multiple_eskom_questions(monkeypatch, db_session)
 
     response = client.post("/ai/ask", json={"question": "what did Ms M Dlamini (EFF) ask about eskom?"})
@@ -133,7 +133,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 10
+    assert body["data_snapshot"]["ai_answer_format_version"] == 11
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -180,8 +180,8 @@ def test_ai_ask_uses_openai_when_configured(monkeypatch):
         def post(self, *args, **kwargs):
             return FakeResponse()
 
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "  'test-key'  ")
-    monkeypatch.setattr("app.services.ai_service.settings.openai_model", "gpt-test")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "  'test-key'  ")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_model", "gpt-test")
     monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
 
     answer, model_used = _ask_openai(
@@ -220,8 +220,8 @@ def test_ai_ask_falls_back_to_chat_completions_when_responses_fails(monkeypatch)
                 return FakeResponse(400, {"error": "not supported"})
             return FakeResponse(200, {"choices": [{"message": {"content": "Chat fallback answer."}}]})
 
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "test-key")
-    monkeypatch.setattr("app.services.ai_service.settings.openai_model", "gpt-test")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "test-key")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_model", "gpt-test")
     monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
 
     answer, model_used = _ask_openai(
@@ -234,8 +234,53 @@ def test_ai_ask_falls_back_to_chat_completions_when_responses_fails(monkeypatch)
     assert model_used == "gpt-test"
 
 
+def test_ai_ask_uses_chat_directly_for_openai_compatible_providers(monkeypatch):
+    seen = {"urls": [], "headers": []}
+
+    class FakeResponse:
+        is_success = True
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OpenRouter answer."}}]}
+
+    class FakeClient:
+        def __init__(self, timeout):
+            self.timeout = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return None
+
+        def post(self, url, *args, **kwargs):
+            seen["urls"].append(url)
+            seen["headers"].append(kwargs["headers"])
+            return FakeResponse()
+
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "test-key")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_model", "openrouter/free-model")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_base_url", "https://openrouter.ai/api/v1")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_app_url", "https://knowyourmpza.vercel.app")
+    monkeypatch.setattr("app.services.ai_service.httpx.Client", FakeClient)
+
+    answer, model_used = _ask_openai(
+        "who is julius malema?",
+        RetrievedEvidence(intent="profile", sources=[{"title": "J Malema"}], coverage_notice=""),
+        "fallback",
+    )
+
+    assert answer == "OpenRouter answer."
+    assert model_used == "openrouter/free-model"
+    assert seen["urls"] == ["https://openrouter.ai/api/v1/chat/completions"]
+    assert seen["headers"][0]["HTTP-Referer"] == "https://knowyourmpza.vercel.app"
+    assert seen["headers"][0]["X-Title"] == "KnowYourMPZA"
+
+
 def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monkeypatch):
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     eff = Party(name="Economic Freedom Fighters", short_name="EFF")
     unknown = Party(name="Unknown", short_name="UNKNOWN")
     db_session.add_all([eff, unknown])
@@ -284,11 +329,11 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 10
+    assert body["data_snapshot"]["ai_answer_format_version"] == 11
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     party = Party(name="African National Congress", short_name="ANC")
     db_session.add(party)
     db_session.flush()
@@ -328,7 +373,7 @@ def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     _ingest_eskom_question(monkeypatch, db_session)
 
     first = client.post("/ai/ask", json={"question": "Which MPs asked questions about Eskom?"})
@@ -345,7 +390,7 @@ def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_s
 
 
 def test_ai_ask_refresh_regenerates_saved_answer(monkeypatch, db_session):
-    monkeypatch.setattr("app.services.ai_service.settings.openai_api_key", "")
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
     _ingest_eskom_question(monkeypatch, db_session)
 
     first = client.post("/ai/ask", json={"question": "Which MPs asked questions about Eskom?"})
