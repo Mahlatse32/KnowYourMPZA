@@ -16,6 +16,7 @@ jobs:
       RENDER_REPO: https://github.com/Mahlatse32/KnowYourMPZA
       RENDER_BRANCH: main
       RENDER_CORS_ORIGIN: https://knowyourmpza.vercel.app
+      RENDER_COMMIT_ID: ${{ github.sha }}
       RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
       SUPABASE_DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
@@ -119,6 +120,52 @@ jobs:
                   out.write("created=true\n")
           PY
 
+      - name: Trigger Render deploy
+        id: deploy
+        env:
+          RENDER_SERVICE_ID: ${{ steps.render.outputs.service_id }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          api_key = os.environ["RENDER_API_KEY"]
+          service_id = os.environ["RENDER_SERVICE_ID"]
+          commit_id = os.environ["RENDER_COMMIT_ID"]
+
+          headers = {
+              "Accept": "application/json",
+              "Authorization": f"Bearer {api_key}",
+              "Content-Type": "application/json",
+          }
+          payload = {"clearCache": "do_not_clear", "commitId": commit_id}
+          req = urllib.request.Request(
+              f"https://api.render.com/v1/services/{service_id}/deploy",
+              data=json.dumps(payload).encode("utf-8"),
+              method="POST",
+              headers=headers,
+          )
+          try:
+              with urllib.request.urlopen(req, timeout=60) as resp:
+                  body = resp.read().decode("utf-8")
+                  data = json.loads(body) if body else {}
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"Render deploy trigger failed: HTTP {exc.code} {body}", file=sys.stderr)
+              raise
+
+          deploy = data.get("deploy", data)
+          deploy_id = deploy.get("id", "")
+          deploy_status = deploy.get("status", "")
+          print(f"Triggered Render deploy: {deploy_id} status={deploy_status} commit={commit_id}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"deploy_id={deploy_id}\n")
+              out.write(f"deploy_status={deploy_status}\n")
+          PY
+
       - name: Summary
         run: |
           {
@@ -127,6 +174,9 @@ jobs:
             echo "- Service ID: ${{ steps.render.outputs.service_id }}"
             echo "- Service URL: ${{ steps.render.outputs.service_url }}"
             echo "- Created: ${{ steps.render.outputs.created }}"
+            echo "- Deploy ID: ${{ steps.deploy.outputs.deploy_id }}"
+            echo "- Deploy status: ${{ steps.deploy.outputs.deploy_status }}"
+            echo "- Commit: $RENDER_COMMIT_ID"
             echo
             echo "DATABASE_URL was passed as a secret and not printed."
           } >> "$GITHUB_STEP_SUMMARY"
