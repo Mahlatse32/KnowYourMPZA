@@ -26,8 +26,19 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 16
+AI_ANSWER_FORMAT_VERSION = 17
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class EvidencePlan:
+    intent: str
+    action: str = "general"
+    person_subject: str | None = None
+    topic_terms: list[str] | None = None
+    search_terms: list[str] | None = None
+    politician: Politician | None = None
+    person_aliases: list[str] | None = None
 
 
 @dataclass
@@ -75,11 +86,12 @@ def answer_question(db: Session, question: str, refresh: bool = False) -> tuple[
 
 
 def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
-    terms = _search_terms(question)
-    subject = _question_subject(question)
+    plan = _build_evidence_plan(db, question)
+    terms = plan.search_terms or _search_terms(question)
+    subject = _question_subject(question) or plan.person_subject
     asker_terms = _question_asker_terms(question)
     topic_terms = _question_topic_terms(question, terms, asker_terms)
-    intent = _classify_intent(question)
+    intent = plan.intent
     if intent == "questions":
         sources = _question_sources(db, topic_terms or terms, asker_terms=asker_terms)
     elif intent == "committees":
@@ -95,7 +107,10 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
     elif intent == "attendance":
         sources = _attendance_sources(db, terms)
     elif intent == "hearings":
-        sources = _hearing_sources(db, _hearing_topic_terms(question, terms))
+        if plan.person_subject:
+            sources = _person_meeting_sources(db, plan)
+        else:
+            sources = _hearing_sources(db, plan.topic_terms or _hearing_topic_terms(question, terms))
     elif intent == "profile":
         subject = _profile_subject(question) or " ".join(terms)
         sources = _profile_sources(db, subject)
@@ -111,7 +126,13 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
         coverage_notice=_coverage_notice(intent, bool(sources)),
         subject=subject or (_profile_subject(question) if intent == "profile" else None),
         topic=_topic_from_terms(topic_terms),
-        answer_kind="questions_by_person_topic" if asker_terms and topic_terms and intent == "questions" else "general",
+        answer_kind=(
+            "person_meeting_activity"
+            if intent == "hearings" and plan.person_subject
+            else "questions_by_person_topic"
+            if asker_terms and topic_terms and intent == "questions"
+            else "general"
+        ),
     )
 
 
@@ -221,6 +242,14 @@ def _required_ai_answer_terms(evidence: RetrievedEvidence, fallback_answer: str)
         return terms
 
     if evidence.intent == "hearings":
+        if evidence.answer_kind == "person_meeting_activity":
+            involvements = {source.get("involvement") for source in evidence.sources}
+            terms = [source.get("title") for source in evidence.sources[:3] if source.get("title")]
+            if "intervention" not in involvements:
+                terms.append("cannot verify")
+            if "apology" in involvements:
+                terms.append("apolog")
+            return terms
         return [source.get("title") for source in evidence.sources[:3] if source.get("title")]
 
     return []
@@ -328,6 +357,106 @@ def _classify_intent(question: str) -> str:
     if any(word in text for word in ["vote", "division", "voted"]):
         return "votes"
     return "politicians"
+
+
+def _build_evidence_plan(db: Session, question: str) -> EvidencePlan:
+    intent = _classify_intent(question)
+    terms = _search_terms(question)
+    action = _requested_action(question)
+    person_subject = _requested_person_subject(question, intent)
+    politician = _resolve_profile_politician(db, person_subject) if person_subject else None
+    aliases = _person_aliases(person_subject, politician) if person_subject else []
+    topic_terms = _topic_terms_for_plan(question, intent, terms, aliases)
+    return EvidencePlan(
+        intent=intent,
+        action=action,
+        person_subject=person_subject,
+        topic_terms=topic_terms,
+        search_terms=terms,
+        politician=politician,
+        person_aliases=aliases,
+    )
+
+
+def _requested_action(question: str) -> str:
+    text = question.lower()
+    if re.search(r"\b(ask|asked|question|questions|say|said|raised|intervention|interventions)\b", text):
+        return "spoken_question"
+    if re.search(r"\b(attend|attended|present|absent|apology|apologies)\b", text):
+        return "attendance"
+    if re.search(r"\b(vote|voted|division)\b", text):
+        return "vote"
+    if re.search(r"\b(sit|sits|serve|serves|served|member)\b", text):
+        return "membership"
+    return "general"
+
+
+def _requested_person_subject(question: str, intent: str) -> str | None:
+    patterns = [
+        r"\bwhat\s+did\s+(.+?)\s+(?:ask|say|raise)\b",
+        r"\bwhat\s+has\s+(.+?)\s+(?:asked|said|raised|done)\b",
+        r"\bdid\s+(.+?)\s+(?:ask|say|raise|attend|vote)\b",
+        r"\bwhich\s+questions\s+did\s+(.+?)\s+ask\b",
+        r"\bwhere\s+was\s+(.+?)\s+(?:present|absent)\b",
+        r"\b(?:attendance|profile|record)\s+for\s+(.+?)(?:\?|$)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, question, flags=re.IGNORECASE)
+        if match:
+            return _clean_subject(match.group(1))
+    if intent == "profile":
+        return _profile_subject(question)
+    return _question_subject(question)
+
+
+def _clean_subject(value: str | None) -> str | None:
+    if not value:
+        return None
+    cleaned = re.sub(r"\([^)]+\)", " ", value)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ?.,")
+    if cleaned.islower():
+        cleaned = cleaned.title()
+    return cleaned or None
+
+
+def _person_aliases(subject: str | None, politician: Politician | None) -> list[str]:
+    values: list[str] = []
+    if subject:
+        values.append(subject)
+    if politician:
+        values.extend([politician.display_name, politician.full_name])
+        values.extend(alias.alias for alias in politician.aliases)
+    aliases = _unique_values(_clean_display_text(value) for value in values if value)
+    tokens = _name_tokens(politician.full_name if politician else subject)
+    if tokens:
+        surname = tokens[-1].title()
+        initials = " ".join(token[0].upper() for token in tokens[:-1])
+        aliases.extend(
+            _unique_values(
+                [
+                    surname,
+                    f"Mr {surname}",
+                    f"Ms {surname}",
+                    f"Mrs {surname}",
+                    f"Dr {surname}",
+                    f"{initials} {surname}" if initials else None,
+                    f"Mr {initials} {surname}" if initials else None,
+                    f"Ms {initials} {surname}" if initials else None,
+                ]
+            )
+        )
+    return _unique_values(alias for alias in aliases if alias)
+
+
+def _topic_terms_for_plan(question: str, intent: str, terms: list[str], aliases: list[str]) -> list[str]:
+    if intent == "hearings":
+        topic_terms = _hearing_topic_terms(question, terms)
+    elif intent == "committees":
+        topic_terms = _committee_topic_terms(question, terms)
+    else:
+        topic_terms = terms
+    alias_tokens = {token.lower() for alias in aliases for token in _name_tokens(alias)}
+    return [term for term in topic_terms if term.lower() not in alias_tokens]
 
 
 def _search_terms(question: str) -> list[str]:
@@ -656,6 +785,137 @@ def _hearing_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
     return [_meeting_to_source(item) for item in strong[:MAX_SOURCES]]
 
 
+def _person_meeting_sources(db: Session, plan: EvidencePlan) -> list[dict[str, Any]]:
+    meetings = _matching_meetings(db, plan.topic_terms or plan.search_terms or [])
+    if not meetings:
+        return []
+    sources: list[dict[str, Any]] = []
+    for meeting in meetings:
+        attendance = _meeting_attendance_for_person(db, meeting, plan)
+        contexts = _person_contexts(meeting.summary, plan.person_aliases or [])
+        involvement = _classify_meeting_involvement(contexts, attendance)
+        source = _meeting_to_source(meeting)
+        source["source_type"] = "person_meeting_evidence"
+        source["person"] = plan.person_subject
+        source["resolved_person"] = plan.politician.display_name if plan.politician else None
+        source["requested_action"] = plan.action
+        source["involvement"] = involvement
+        source["person_contexts"] = contexts[:3]
+        source["attendance_status"] = attendance.attendance_status if attendance else None
+        source["attendance_name"] = attendance.name_raw if attendance else None
+        source["meeting_summary"] = _meeting_topic_excerpt(meeting.summary, plan.person_aliases or [])
+        source["excerpt"] = _person_meeting_excerpt(source, meeting)
+        sources.append(source)
+    sources = sorted(sources, key=_person_meeting_source_rank)
+    return sources[:MAX_SOURCES]
+
+
+def _matching_meetings(db: Session, terms: list[str]) -> list[CommitteeMeeting]:
+    statement = select(CommitteeMeeting).order_by(CommitteeMeeting.date.desc().nullslast(), CommitteeMeeting.updated_at.desc()).limit(MAX_SOURCES * 6)
+    filters = _filters([CommitteeMeeting.title, CommitteeMeeting.committee_name, CommitteeMeeting.summary], terms)
+    if filters:
+        statement = statement.where(or_(*filters))
+    scored = sorted(
+        ((item, _meeting_match_score(item, terms)) for item in db.scalars(statement)),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    strong = [item for item, score in scored if score >= 2]
+    if not strong and scored:
+        strong = [item for item, score in scored if score > 0]
+    return strong[:MAX_SOURCES]
+
+
+def _meeting_attendance_for_person(db: Session, meeting: CommitteeMeeting, plan: EvidencePlan) -> CommitteeAttendance | None:
+    if plan.politician:
+        attendance = db.scalar(
+            select(CommitteeAttendance)
+            .where(
+                CommitteeAttendance.meeting_id == meeting.id,
+                CommitteeAttendance.politician_id == plan.politician.id,
+            )
+            .limit(1)
+        )
+        if attendance:
+            return attendance
+    filters = _filters([CommitteeAttendance.name_raw], plan.person_aliases or [])
+    if not filters:
+        return None
+    return db.scalar(
+        select(CommitteeAttendance)
+        .where(CommitteeAttendance.meeting_id == meeting.id, or_(*filters))
+        .limit(1)
+    )
+
+
+def _person_contexts(text: str | None, aliases: list[str]) -> list[str]:
+    if not text or not aliases:
+        return []
+    chunks = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s+|\n+", text) if chunk.strip()]
+    contexts: list[str] = []
+    for index, chunk in enumerate(chunks):
+        if any(_alias_in_text(alias, chunk) for alias in aliases):
+            start = max(0, index - 1)
+            end = min(len(chunks), index + 2)
+            contexts.append(_clean_display_text(" ".join(chunks[start:end])))
+    return _unique_values(contexts)
+
+
+def _alias_in_text(alias: str, text: str) -> bool:
+    tokens = _name_tokens(alias)
+    if not tokens:
+        return False
+    normalized_text = " ".join(_name_tokens(text))
+    if len(tokens) == 1:
+        return re.search(rf"\b{re.escape(tokens[0])}\b", normalized_text) is not None
+    return all(re.search(rf"\b{re.escape(token)}\b", normalized_text) for token in tokens)
+
+
+def _classify_meeting_involvement(contexts: list[str], attendance: CommitteeAttendance | None) -> str:
+    context_text = " ".join(contexts).lower()
+    if re.search(r"\b(apology|apologies|apologised|prior commitment|prior commitments)\b", context_text):
+        return "apology"
+    if re.search(r"\b(asked|questioned|enquired|wanted to know|sought clarity|raised|said|submitted|proposed)\b", context_text):
+        return "intervention"
+    if attendance and attendance.attendance_status:
+        status = attendance.attendance_status.lower()
+        if status in {"present", "absent", "apology"}:
+            return status
+    if contexts:
+        return "mentioned"
+    return "not_found"
+
+
+def _person_meeting_excerpt(source: dict[str, Any], meeting: CommitteeMeeting) -> str | None:
+    contexts = source.get("person_contexts") or []
+    if contexts:
+        return _excerpt(contexts[0])
+    attendance_status = source.get("attendance_status")
+    if attendance_status:
+        return _excerpt(f"{source.get('attendance_name') or source.get('person')} recorded as {attendance_status}.")
+    return _excerpt("No mention of the requested person was found in the imported meeting text.")
+
+
+def _meeting_topic_excerpt(text: str | None, aliases: list[str]) -> str | None:
+    if not text:
+        return None
+    chunks = [chunk.strip() for chunk in re.split(r"(?<=[.!?])\s+|\n+", text) if chunk.strip()]
+    topic_chunks = [chunk for chunk in chunks if not any(_alias_in_text(alias, chunk) for alias in aliases)]
+    return _excerpt(" ".join(topic_chunks[:3]) or text)
+
+
+def _person_meeting_source_rank(source: dict[str, Any]) -> tuple[int, str]:
+    involvement_rank = {
+        "intervention": 0,
+        "present": 1,
+        "mentioned": 2,
+        "apology": 3,
+        "absent": 4,
+        "not_found": 5,
+    }.get(source.get("involvement"), 6)
+    return (involvement_rank, str(source.get("date") or ""))
+
+
 def _meeting_match_score(meeting: CommitteeMeeting, terms: list[str]) -> int:
     text = " ".join(part for part in [meeting.title, meeting.committee_name, meeting.summary] if part).lower()
     tokens = set(re.findall(r"[a-z][a-z0-9+-]{2,}", text))
@@ -927,6 +1187,8 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
     if evidence.intent == "questions":
         return _build_question_answer(question, evidence)
     if evidence.intent == "hearings":
+        if evidence.answer_kind == "person_meeting_activity":
+            return _build_person_meeting_answer(question, evidence)
         return _build_hearing_answer(question, evidence)
     lines = [
         f"Based on the source-backed records currently imported, I found {len(evidence.sources)} relevant record"
@@ -980,6 +1242,80 @@ def _build_hearing_answer(question: str, evidence: RetrievedEvidence) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _build_person_meeting_answer(question: str, evidence: RetrievedEvidence) -> str:
+    person = evidence.subject or evidence.sources[0].get("person") or "the requested person"
+    interventions = [source for source in evidence.sources if source.get("involvement") == "intervention"]
+    apologies = [source for source in evidence.sources if source.get("involvement") == "apology"]
+    present = [source for source in evidence.sources if source.get("involvement") == "present"]
+    mentions = [source for source in evidence.sources if source.get("involvement") == "mentioned"]
+
+    asks_for_question = bool(re.search(r"\b(what|which|did)\b.+\b(ask|asked|question|questions|say|said|raise|raised)\b", question, flags=re.IGNORECASE))
+    if interventions:
+        lines = [
+            f"I found source-backed PMG meeting text where {person} appears to speak or raise a point.",
+            "",
+            "Relevant extracted context:",
+        ]
+        for source in interventions[:5]:
+            lines.append(_person_meeting_line(source))
+    elif asks_for_question:
+        lines = [
+            f"I could not find a source-backed record of {person} asking a question in the imported PMG hearing records.",
+        ]
+        if apologies:
+            first = apologies[0]
+            date = f" on {first['date']}" if first.get("date") else ""
+            lines.append(
+                f"In the PMG record for {_clean_display_text(first['title'])}{date}, {person} is mentioned as having sent apologies, not as having spoken."
+            )
+        elif present or mentions:
+            lines.append(
+                f"{person} is mentioned in the matching PMG records, but the imported text does not show a question or intervention by them."
+            )
+        else:
+            lines.append(f"The matching PMG records do not mention {person} in the imported text.")
+        lines.extend(["", "What the matching PMG records cover:"])
+        for source in evidence.sources[:5]:
+            lines.append(_meeting_topic_line(source))
+    else:
+        lines = [f"I found {len(evidence.sources)} matching PMG meeting record{'' if len(evidence.sources) == 1 else 's'} for {person}.", ""]
+        lines.append("Relevant source-backed records:")
+        for source in evidence.sources[:5]:
+            lines.append(_person_meeting_line(source))
+
+    if len(evidence.sources) > 5:
+        lines.append(f"- Plus {len(evidence.sources) - 5} more matching imported meeting records.")
+    lines.extend(["", evidence.coverage_notice, "Use the source links below to verify each record."])
+    return "\n".join(lines)
+
+
+def _person_meeting_line(source: dict[str, Any]) -> str:
+    title = _clean_display_text(source["title"])
+    detail = " | ".join(part for part in [source.get("date"), source.get("committee_name")] if part)
+    involvement = source.get("involvement")
+    excerpt = _clean_answer_excerpt(source.get("excerpt"))
+    line = f"- {title}"
+    if detail:
+        line = f"{line} ({detail})"
+    if involvement and involvement != "not_found":
+        line = f"{line} [{involvement}]"
+    if excerpt:
+        line = f"{line}: {excerpt}"
+    return line
+
+
+def _meeting_topic_line(source: dict[str, Any]) -> str:
+    title = _clean_display_text(source["title"])
+    detail = " | ".join(part for part in [source.get("date"), source.get("committee_name")] if part)
+    summary = _clean_answer_excerpt(source.get("meeting_summary") or source.get("excerpt"))
+    line = f"- {title}"
+    if detail:
+        line = f"{line} ({detail})"
+    if summary:
+        line = f"{line}: {summary}"
+    return line
 
 
 def _build_committee_membership_answer(evidence: RetrievedEvidence) -> str:
