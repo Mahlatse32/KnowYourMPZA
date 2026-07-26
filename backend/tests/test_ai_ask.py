@@ -13,6 +13,7 @@ from app.models.committee_attendance import CommitteeAttendance
 from app.models.committee_meeting import CommitteeMeeting
 from app.models.committee_membership import CommitteeMembership
 from app.models.ai_answer import AiAnswer
+from app.models.parliamentary_question import ParliamentaryQuestion
 from app.models.party import Party
 from app.models.politician import Politician
 from app.services.ai_service import RetrievedEvidence, _ask_openai, _clean_display_text, _clean_parliament_question_text
@@ -117,7 +118,7 @@ def test_ai_ask_returns_source_backed_answer_without_openai_key(monkeypatch, db_
     assert any(source["source_url"] == source_url for source in body["sources"])
     assert any(source["asked_by"] == "Julius Malema" for source in body["sources"])
     assert body["data_snapshot"]["parliamentary_questions"] >= 1
-    assert body["data_snapshot"]["ai_answer_format_version"] == 18
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
     assert body["data_snapshot"]["openai_configured"] == 0
 
 
@@ -136,7 +137,7 @@ def test_ai_ask_filters_questions_by_named_mp_and_topic(monkeypatch, db_session)
     assert all("Dlamini" in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Tito" not in f"{source.get('asked_by')} {source.get('excerpt')}" for source in body["sources"])
     assert all("Eskom" in f"{source['title']} {source.get('excerpt')}" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 18
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
 
 
 def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_session):
@@ -208,7 +209,7 @@ def test_ai_ask_routes_hearing_question_to_committee_meetings(monkeypatch, db_se
     assert body["sources"][0]["status"] is None
     assert body["sources"][0]["source_url"] == "https://pmg.org.za/committee-meeting/43160/"
     assert all(source["source_url"] != "https://pmg.org.za/committee-meeting/general-laws/" for source in body["sources"])
-    assert body["data_snapshot"]["ai_answer_format_version"] == 18
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
 
 
 def test_ai_ask_extracts_person_intervention_from_hearing(monkeypatch, db_session):
@@ -239,7 +240,7 @@ def test_ai_ask_extracts_person_intervention_from_hearing(monkeypatch, db_sessio
     assert body["answer"].startswith("I found source-backed PMG meeting text where Ms Dlamini")
     assert "asked whether suspended officials had access to case dockets" in body["answer"]
     assert body["sources"][0]["source_type"] == "person_meeting_evidence"
-    assert body["data_snapshot"]["ai_answer_format_version"] == 18
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
 
 
 def test_ai_question_evidence_text_is_cleaned_before_answering():
@@ -559,7 +560,7 @@ def test_ai_ask_who_is_resolves_profile_without_near_name_noise(db_session, monk
             "status": None,
         }
     ]
-    assert body["data_snapshot"]["ai_answer_format_version"] == 18
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
 
 
 def test_ai_ask_who_sits_on_committee_lists_members(db_session, monkeypatch):
@@ -644,13 +645,58 @@ def test_ai_ask_counts_and_names_party_members(db_session, monkeypatch):
     body = response.json()
     assert body["intent"] == "parties"
     assert body["model_used"] == "deterministic-source-summary"
-    assert "I found 2 imported politician records linked to EFF." in body["answer"]
+    assert "I found 2 imported politician records directly linked to EFF." in body["answer"]
     assert "J Malema" in body["answer"]
     assert "M Ndlozi" in body["answer"]
     assert "E ANC" not in body["answer"]
     assert body["sources"][0]["source_type"] == "party_member_summary"
     assert body["sources"][0]["source_url"] == "https://example.test/party/eff"
-    assert body["data_snapshot"]["ai_answer_format_version"] == 18
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
+
+
+def test_ai_ask_uses_party_labeled_question_names_when_party_links_missing(db_session, monkeypatch):
+    monkeypatch.setattr("app.services.ai_service.settings.ai_api_key", "")
+    eff = Party(name="Economic Freedom Fighters", short_name="EFF", source_url="https://example.test/party/eff")
+    db_session.add(eff)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ParliamentaryQuestion(
+                title="Written question NW1025",
+                question_number="NW1025",
+                asked_by_name="Ms M Dlamini (EFF)",
+                question_text="Question about Eskom maintenance.",
+                source_url="https://example.test/questions/nw1025",
+            ),
+            ParliamentaryQuestion(
+                title="Written question NW1637",
+                question_number="NW1637",
+                asked_by_name="Ms M Dlamini (EFF)",
+                question_text="Another question from the same MP.",
+                source_url="https://example.test/questions/nw1637",
+            ),
+            ParliamentaryQuestion(
+                title="Written question NW1661",
+                question_number="NW1661",
+                asked_by_name="Mrs L F Tito (EFF)",
+                question_text="Question about schools.",
+                source_url="https://example.test/questions/nw1661",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    response = client.post("/ai/ask", json={"question": "can you tell how many people are members of the EFF and name them?"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "parties"
+    assert "2 source-backed person records labeled as EFF" in body["answer"]
+    assert "none are directly linked to the party table yet" in body["answer"]
+    assert "Ms M Dlamini" in body["answer"]
+    assert "Mrs L F Tito" in body["answer"]
+    assert body["sources"][0]["source_type"] == "party_member_summary"
+    assert body["data_snapshot"]["ai_answer_format_version"] == 19
 
 
 def test_ai_ask_reuses_saved_answer_when_snapshot_is_unchanged(monkeypatch, db_session):
