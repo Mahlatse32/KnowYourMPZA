@@ -26,7 +26,7 @@ from app.models.vote_event import VoteEvent
 
 MAX_SOURCES = 8
 MAX_EXCERPT_CHARS = 260
-AI_ANSWER_FORMAT_VERSION = 17
+AI_ANSWER_FORMAT_VERSION = 18
 logger = logging.getLogger(__name__)
 
 
@@ -94,6 +94,8 @@ def retrieve_evidence(db: Session, question: str) -> RetrievedEvidence:
     intent = plan.intent
     if intent == "questions":
         sources = _question_sources(db, topic_terms or terms, asker_terms=asker_terms)
+    elif intent == "parties":
+        sources = _party_member_sources(db, question)
     elif intent == "committees":
         committee_terms = _committee_topic_terms(question, terms)
         if _is_committee_membership_question(question):
@@ -233,6 +235,13 @@ def _required_ai_answer_terms(evidence: RetrievedEvidence, fallback_answer: str)
         members = evidence.sources[0].get("members") or []
         return [_member_label(member).split(" (", 1)[0] for member in members[:MAX_SOURCES]]
 
+    if evidence.intent == "parties" and evidence.sources:
+        source = evidence.sources[0]
+        members = source.get("members") or []
+        terms = [str(source.get("member_count") or len(members)), source.get("party_short_name") or source.get("party_name")]
+        terms.extend(member.get("name") for member in members[: min(5, len(members))])
+        return [term for term in terms if term]
+
     if evidence.intent == "profile" and evidence.sources:
         source = evidence.sources[0]
         name = source.get("full_name") or source.get("display_name") or source.get("title") or fallback_answer.split(" ", 1)[0]
@@ -344,6 +353,11 @@ def _classify_intent(question: str) -> str:
     text = question.lower()
     if re.search(r"\b(who is|who's|tell me about|profile of|what is known about)\b", text):
         return "profile"
+    if re.search(r"\b(how many|who|which|name|list|people|mps?|members?)\b", text) and re.search(
+        r"\b(party|parties|member|members|belong|belongs)\s+(?:of|to|in)\b|\bmembers?\s+of\b|\bfrom\s+the\b",
+        text,
+    ):
+        return "parties"
     if any(word in text for word in ["hearing", "hearings", "enquiry", "inquiry", "testimony", "testified", "briefing"]):
         return "hearings"
     if any(word in text for word in ["question", "asked", " ask ", "minister", "department"]):
@@ -657,6 +671,66 @@ def _committee_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
         }
         for item in db.scalars(statement)
     ]
+
+
+def _party_member_sources(db: Session, question: str) -> list[dict[str, Any]]:
+    party = _resolve_party_from_question(db, question)
+    if party is None:
+        return []
+    members = list(
+        db.scalars(
+            select(Politician)
+            .options(joinedload(Politician.party))
+            .where(Politician.party_id == party.id)
+            .order_by(Politician.display_name)
+            .limit(500)
+        )
+    )
+    member_rows = [
+        {
+            "name": _clean_display_text(member.display_name),
+            "full_name": _clean_display_text(member.full_name),
+            "source_url": member.profile_url,
+            "source_status": member.source_status,
+        }
+        for member in members
+    ]
+    names = [member["name"] for member in member_rows]
+    return [
+        {
+            "title": f"{party.short_name} members",
+            "source_url": party.source_url or (member_rows[0]["source_url"] if member_rows else None),
+            "source_type": "party_member_summary",
+            "record_id": str(party.id),
+            "date": None,
+            "excerpt": _excerpt(f"{len(member_rows)} imported politicians linked to {party.short_name}: {', '.join(names[:20])}"),
+            "party_name": party.name,
+            "party_short_name": party.short_name,
+            "member_count": len(member_rows),
+            "members": member_rows,
+        }
+    ]
+
+
+def _resolve_party_from_question(db: Session, question: str) -> Party | None:
+    normalized = question.lower()
+    parties = list(db.scalars(select(Party).order_by(Party.short_name)))
+    exact_matches = [
+        party
+        for party in parties
+        if re.search(rf"\b{re.escape(party.short_name.lower())}\b", normalized)
+        or re.search(rf"\b{re.escape(party.name.lower())}\b", normalized)
+    ]
+    if exact_matches:
+        return sorted(exact_matches, key=lambda party: len(party.short_name), reverse=True)[0]
+    terms = set(_search_terms(question))
+    candidates = [
+        party
+        for party in parties
+        if party.short_name.lower() in terms
+        or any(token in terms for token in _name_tokens(party.name))
+    ]
+    return candidates[0] if candidates else None
 
 
 def _committee_membership_sources(db: Session, terms: list[str]) -> list[dict[str, Any]]:
@@ -1182,6 +1256,8 @@ def _build_deterministic_answer(question: str, evidence: RetrievedEvidence) -> s
         )
     if evidence.intent == "profile":
         return _build_profile_answer(evidence)
+    if evidence.intent == "parties" and evidence.sources[0].get("source_type") == "party_member_summary":
+        return _build_party_member_answer(evidence)
     if evidence.intent == "committees" and evidence.sources[0].get("source_type") == "committee_membership_summary":
         return _build_committee_membership_answer(evidence)
     if evidence.intent == "questions":
@@ -1342,6 +1418,37 @@ def _build_committee_membership_answer(evidence: RetrievedEvidence) -> str:
     for member in members[:MAX_SOURCES]:
         lines.append(f"- {_member_label(member)}")
     lines.extend(["", evidence.coverage_notice, "Use the source links below to verify the membership records."])
+    return "\n".join(lines)
+
+
+def _build_party_member_answer(evidence: RetrievedEvidence) -> str:
+    source = evidence.sources[0]
+    party_name = _clean_display_text(source.get("party_short_name") or source.get("party_name") or source["title"])
+    members = source.get("members") or []
+    member_count = source.get("member_count") if source.get("member_count") is not None else len(members)
+    if not members:
+        return "\n".join(
+            [
+                f"I found the {party_name} party record, but no politicians are currently linked to it in the imported records.",
+                "",
+                evidence.coverage_notice,
+                "Use the source link below to verify the party record.",
+            ]
+        )
+    lines = [
+        f"I found {member_count} imported politician record{'' if member_count == 1 else 's'} linked to {party_name}.",
+        "",
+        "Linked members:",
+    ]
+    for member in members[:MAX_SOURCES]:
+        label = _clean_display_text(member.get("name")) or "Unnamed politician"
+        full_name = _clean_display_text(member.get("full_name"))
+        status = _clean_display_text(member.get("source_status"))
+        details = [detail for detail in [full_name if full_name and full_name != label else None, status] if detail]
+        lines.append(f"- {label}{f' ({', '.join(details)})' if details else ''}")
+    if member_count > MAX_SOURCES:
+        lines.append(f"- Plus {member_count - MAX_SOURCES} more linked politician records.")
+    lines.extend(["", evidence.coverage_notice, "Use the source links below to verify the party and member records."])
     return "\n".join(lines)
 
 
@@ -1570,6 +1677,7 @@ def _coverage_notice(intent: str, has_sources: bool) -> str:
         "bills": "Bills coverage is PMG-backed and may omit records not yet linked from source backfills.",
         "votes": "Vote data is source-backed where available, but individual vote records remain incomplete.",
         "profile": "This profile answer uses only source-backed identity and activity records currently linked in production.",
+        "parties": "Party membership answers use politicians currently linked to party records; historical or not-yet-enriched party links may still be incomplete.",
         "hearings": "Committee hearing answers use imported PMG meeting records; verbatim exchanges are available only where the source record includes them.",
         "politicians": "MP identity records are source-backed, while party and committee links continue to improve through scheduled backfills.",
     }.get(intent, "KnowYourMPZA answers only from imported, source-backed records.")
